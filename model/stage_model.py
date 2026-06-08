@@ -1,0 +1,481 @@
+"""Stage-level multimodal model after COSIE-style preprocessing."""
+
+from __future__ import annotations
+
+from typing import Any, Mapping, Sequence
+
+import torch
+import torch.nn as nn
+
+from .configure import get_default_model_config
+from .linkage_construction import (
+    compute_initial_multimodal_uot_prior,
+    update_uot_prior_from_embeddings,
+)
+from .loss import (
+    compute_pairwise_cosie_crossview_loss,
+    compute_reconstruction_loss,
+)
+from .model_component import (
+    FusionMLP,
+    ModalityDecoder,
+    ModalityMLPEncoder,
+    OTGuidedAttention,
+    WeightedResidualGraphSAGE,
+)
+from .utils import compute_spatial_knn_graph_with_weights
+
+
+def _recursive_update(base: dict[str, Any], updates: Mapping[str, Any] | None) -> dict[str, Any]:
+    if updates is None:
+        return base
+    for key, value in updates.items():
+        if isinstance(value, Mapping) and isinstance(base.get(key), dict):
+            _recursive_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
+    """Return True when the cached UOT prior should be refreshed.
+
+    Recommended training pattern:
+
+    ``model.initialize_ot_prior(feature_dict, section_order)``
+
+    ``for epoch in range(1, epochs + 1):``
+
+    ``    outputs = model(feature_dict, spatial_loc_dict, section_order=section_order, epoch=epoch)``
+
+    ``    loss = outputs["losses"]["total_loss"]``
+
+    ``    optimizer.zero_grad(); loss.backward(); optimizer.step()``
+
+    ``    if should_update_ot(epoch, 20):``
+
+    ``        with torch.no_grad():``
+
+    ``            eval_outputs = model(feature_dict, spatial_loc_dict, section_order=section_order, epoch=epoch)``
+
+    ``            model.update_ot_prior(eval_outputs["final_embeddings"], section_order)``
+    """
+
+    return epoch > 0 and epoch % update_interval == 0
+
+
+class StageMultiModalModel(nn.Module):
+    """V2 stage model built on the V1 COSIE-style multimodal backbone.
+
+    V1 is preserved:
+    ``feature_dict/spatial_loc_dict -> modality MLP encoders -> 128-d latents
+    -> COSIE cross-view loss -> FusionMLP -> 128-d fused embeddings``.
+
+    V2 appends weighted residual GraphSAGE, adjacent-stage UOT-guided
+    attention, and modality decoders. UOT is cached as a prior and does not
+    participate in backpropagation.
+    """
+
+    def __init__(
+        self,
+        config: Mapping[str, Any] | None = None,
+        feature_dict: Mapping[str, Mapping[str, Any]] | None = None,
+    ):
+        super().__init__()
+        self.config = _recursive_update(get_default_model_config(), config)
+        self.latent_dim = int(self.config["model"]["latent_dim"])
+        self.valid_modality_sets = [
+            tuple(modalities)
+            for modalities in self.config["model"]["valid_modality_sets"]
+        ]
+        self.input_dims: dict[str, int] = {}
+        self.encoders = nn.ModuleDict()
+        self.decoders = nn.ModuleDict()
+        self.ot_prior: dict[tuple[str, str], dict[str, Any]] | None = None
+
+        self.fusion_modules = nn.ModuleDict()
+        for modality_order in self.valid_modality_sets:
+            key = self._combo_key(modality_order)
+            self.fusion_modules[key] = FusionMLP(
+                modality_order=modality_order,
+                latent_dim=self.latent_dim,
+                hidden_dims=self.config["fusion"]["hidden_dims"],
+                output_dim=self.config["fusion"]["output_dim"],
+                activation=self.config["fusion"]["activation"],
+                dropout=float(self.config["fusion"]["dropout"]),
+                norm=self.config["fusion"]["norm"],
+                residual=self.config["fusion"]["residual"],
+            )
+
+        graph_cfg = self.config["graphsage"]
+        self.graphsage = WeightedResidualGraphSAGE(
+            input_dim=int(graph_cfg["input_dim"]),
+            output_dim=int(graph_cfg["output_dim"]),
+            dropout=float(graph_cfg["dropout"]),
+            activation=graph_cfg["activation"],
+            norm=graph_cfg["norm"],
+            residual=bool(graph_cfg["residual"]),
+        )
+
+        attn_cfg = self.config["ot_attention"]
+        self.ot_attention = OTGuidedAttention(
+            dim=self.latent_dim,
+            d_attn=int(attn_cfg["d_attn"]),
+            beta=float(attn_cfg["beta"]),
+            beta_warmup=bool(attn_cfg["beta_warmup"]),
+            beta_schedule=attn_cfg["beta_schedule"],
+            dropout=float(attn_cfg["dropout"]),
+            gate=attn_cfg["gate"],
+            use_confidence=bool(attn_cfg["use_confidence"]),
+            residual=bool(attn_cfg["residual"]),
+            norm=attn_cfg["norm"],
+            delta=float(attn_cfg["delta"]),
+        )
+
+        if feature_dict is not None:
+            self.initialize_from_feature_dict(feature_dict)
+
+    @staticmethod
+    def _combo_key(modality_order: tuple[str, ...] | list[str]) -> str:
+        return "__".join(modality_order)
+
+    def _resolve_section_order(
+        self,
+        feature_dict: Mapping[str, Mapping[str, Any]],
+        section_order: Sequence[str] | None,
+    ) -> list[str]:
+        if section_order is None:
+            return sorted(feature_dict.keys())
+        missing = [section for section in section_order if section not in feature_dict]
+        if missing:
+            raise KeyError(f"section_order contains sections missing from feature_dict: {missing}")
+        extras = [section for section in feature_dict.keys() if section not in section_order]
+        if extras:
+            raise KeyError(f"feature_dict contains sections missing from section_order: {extras}")
+        return list(section_order)
+
+    def _resolve_modality_order(self, modalities: Mapping[str, Any] | set[str]) -> tuple[str, ...]:
+        present = set(modalities.keys()) if isinstance(modalities, Mapping) else set(modalities)
+        for valid_set in self.valid_modality_sets:
+            if present == set(valid_set):
+                return valid_set
+        valid_text = ", ".join(self._combo_key(combo) for combo in self.valid_modality_sets)
+        raise ValueError(
+            f"Each section must contain exactly one supported three-modality set. "
+            f"Got {sorted(present)}; supported sets are: {valid_text}."
+            )
+
+    @staticmethod
+    def _looks_like_section_order(value: Any) -> bool:
+        return (
+            isinstance(value, Sequence)
+            and not isinstance(value, (str, bytes))
+            and all(isinstance(section, str) for section in value)
+        )
+
+    def _make_encoder(self, input_dim: int) -> ModalityMLPEncoder:
+        encoder_cfg = self.config["encoder"]
+        return ModalityMLPEncoder(
+            input_dim=input_dim,
+            hidden_dims=encoder_cfg["hidden_dims"],
+            output_dim=encoder_cfg["output_dim"],
+            activation=encoder_cfg["activation"],
+            dropout=float(encoder_cfg["dropout"]),
+            norm=encoder_cfg["norm"],
+            l2_normalize_output=bool(encoder_cfg["l2_normalize_output"]),
+        )
+
+    def _make_decoder(self, output_dim: int) -> ModalityDecoder:
+        decoder_cfg = self.config["decoder"]
+        return ModalityDecoder(
+            input_dim=self.latent_dim,
+            hidden_dim=int(decoder_cfg["hidden_dim"]),
+            output_dim=output_dim,
+            activation=decoder_cfg["activation"],
+            dropout=float(decoder_cfg["dropout"]),
+        )
+
+    def initialize_from_feature_dict(
+        self,
+        feature_dict: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        """Create modality-specific encoders and decoders from feature shapes."""
+
+        for section, modalities in feature_dict.items():
+            self._resolve_modality_order(modalities)
+            for modality, features in modalities.items():
+                if features is None:
+                    raise ValueError(
+                        f"Missing modality {modality} in {section}; this stage "
+                        "expects complete HE+RNA+Protein or HE+RNA+Metabolite sections."
+                    )
+                if not hasattr(features, "shape") or len(features.shape) != 2:
+                    raise ValueError(
+                        f"feature_dict[{section!r}][{modality!r}] must be 2D, "
+                        f"got shape {getattr(features, 'shape', None)}."
+                    )
+                input_dim = int(features.shape[1])
+                if modality in self.input_dims and self.input_dims[modality] != input_dim:
+                    raise ValueError(
+                        f"Modality {modality} has inconsistent input dimensions: "
+                        f"{self.input_dims[modality]} vs {input_dim}."
+                    )
+                if modality not in self.encoders:
+                    self.input_dims[modality] = input_dim
+                    self.encoders[modality] = self._make_encoder(input_dim)
+                if modality not in self.decoders:
+                    self.decoders[modality] = self._make_decoder(input_dim)
+
+    def _select_device(self, feature_dict: Mapping[str, Mapping[str, Any]]) -> torch.device:
+        for modalities in feature_dict.values():
+            for features in modalities.values():
+                if isinstance(features, torch.Tensor) and features.is_cuda:
+                    return features.device
+
+        configured = self.config["training"].get("device", "cpu")
+        if configured == "cuda" and not torch.cuda.is_available():
+            configured = "cpu"
+        return torch.device(configured)
+
+    @staticmethod
+    def _as_float_tensor(x: Any, device: torch.device) -> torch.Tensor:
+        if isinstance(x, torch.Tensor):
+            return x.to(device=device, dtype=torch.float32)
+        return torch.as_tensor(x, dtype=torch.float32, device=device)
+
+    def initialize_ot_prior(
+        self,
+        feature_dict: Mapping[str, Mapping[str, Any]],
+        section_order: Sequence[str] | None = None,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Initialize adjacent-stage UOT priors from preprocessed modality features."""
+
+        if not self.config["uot"]["enabled"]:
+            self.ot_prior = {}
+            return self.ot_prior
+        resolved_order = self._resolve_section_order(feature_dict, section_order)
+        uot_cfg = self.config["uot"]
+        self.ot_prior = compute_initial_multimodal_uot_prior(
+            feature_dict=feature_dict,
+            section_order=resolved_order,
+            modalities=self.config["model"]["modalities_supported"],
+            epsilon_init=float(uot_cfg["epsilon_init"]),
+            tau_a=float(uot_cfg["tau_a"]),
+            tau_b=float(uot_cfg["tau_b"]),
+            max_iter=int(uot_cfg["max_iter"]),
+            tol=float(uot_cfg["tol"]),
+            topk=int(uot_cfg["topk"]),
+            delta=float(self.config["ot_attention"]["delta"]),
+            check_every=int(uot_cfg["check_every"]),
+            clip_cost_min=float(uot_cfg["clip_cost_min"]),
+            clip_cost_max=float(uot_cfg["clip_cost_max"]),
+            keep_dense=bool(uot_cfg.get("keep_dense", False)),
+        )
+        return self.ot_prior
+
+    @torch.no_grad()
+    def update_ot_prior(
+        self,
+        final_embedding_dict: Mapping[str, torch.Tensor],
+        section_order: Sequence[str] | None = None,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Refresh adjacent-stage UOT priors from detached final embeddings."""
+
+        if not self.config["uot"]["enabled"]:
+            self.ot_prior = {}
+            return self.ot_prior
+        uot_cfg = self.config["uot"]
+        self.ot_prior = update_uot_prior_from_embeddings(
+            final_embedding_dict=final_embedding_dict,
+            section_order=section_order,
+            epsilon_update=float(uot_cfg["epsilon_update"]),
+            tau_a=float(uot_cfg["tau_a"]),
+            tau_b=float(uot_cfg["tau_b"]),
+            max_iter=int(uot_cfg["max_iter"]),
+            tol=float(uot_cfg["tol"]),
+            topk=int(uot_cfg["topk"]),
+            delta=float(self.config["ot_attention"]["delta"]),
+            check_every=int(uot_cfg["check_every"]),
+            clip_cost_min=float(uot_cfg["clip_cost_min"]),
+            clip_cost_max=float(uot_cfg["clip_cost_max"]),
+            keep_dense=bool(uot_cfg.get("keep_dense", False)),
+        )
+        return self.ot_prior
+
+    def forward(
+        self,
+        feature_dict: Mapping[str, Mapping[str, Any]],
+        spatial_loc_dict: Mapping[str, Any],
+        processed_data_dict: Any | None = None,
+        section_order: Sequence[str] | None = None,
+        epoch: int | None = None,
+    ) -> dict[str, Any]:
+        if self._looks_like_section_order(processed_data_dict):
+            if section_order is None:
+                section_order = processed_data_dict
+                processed_data_dict = None
+            elif isinstance(section_order, int) and epoch is None:
+                epoch = int(section_order)
+                section_order = processed_data_dict
+                processed_data_dict = None
+
+        if not self.encoders:
+            self.initialize_from_feature_dict(feature_dict)
+
+        resolved_order = self._resolve_section_order(feature_dict, section_order)
+        device = self._select_device(feature_dict)
+        self.to(device)
+
+        graph_cfg = self.config["graph"]
+        graph_sage_cfg = self.config["graphsage"]
+        contrastive_gamma = float(self.config["contrastive"]["gamma"])
+        lambda_contrast = float(self.config["loss"]["lambda_contrast"])
+        lambda_reconstruction = float(self.config["loss"]["lambda_reconstruction"])
+        lambda_by_modality = self.config["reconstruction"]["lambda_by_modality"]
+
+        fused_embeddings: dict[str, torch.Tensor] = {}
+        graphsage_embeddings: dict[str, torch.Tensor] = {}
+        final_embeddings: dict[str, torch.Tensor] = {}
+        latent_dict: dict[str, dict[str, torch.Tensor]] = {}
+        reconstructions: dict[str, dict[str, torch.Tensor]] = {}
+        target_feature_dict: dict[str, dict[str, torch.Tensor]] = {}
+        spatial_graph_dict: dict[str, dict[str, torch.Tensor]] = {}
+        crossview_details: dict[str, dict[str, torch.Tensor]] = {}
+        reconstruction_details: dict[str, dict[str, torch.Tensor]] = {}
+        messages: list[str] = [
+            "processed_data_dict is accepted for pipeline compatibility but is not used by Model Stage V2."
+        ]
+        crossview_loss = torch.zeros((), device=device)
+        reconstruction_loss = torch.zeros((), device=device)
+
+        for section in resolved_order:
+            if section not in spatial_loc_dict:
+                raise KeyError(f"Missing spatial coordinates for section {section}.")
+
+            modalities = feature_dict[section]
+            modality_order = self._resolve_modality_order(modalities)
+            combo_key = self._combo_key(modality_order)
+
+            section_features: dict[str, torch.Tensor] = {}
+            n_spots: int | None = None
+            for modality in modality_order:
+                x_mod = self._as_float_tensor(modalities[modality], device=device)
+                if x_mod.ndim != 2:
+                    raise ValueError(
+                        f"feature_dict[{section!r}][{modality!r}] must be 2D, got {x_mod.ndim}D."
+                    )
+                if n_spots is None:
+                    n_spots = int(x_mod.shape[0])
+                elif int(x_mod.shape[0]) != n_spots:
+                    raise ValueError(
+                        f"All modalities in {section} must have the same spot count; "
+                        f"got {modality} with {x_mod.shape[0]} vs {n_spots}."
+                    )
+                section_features[modality] = x_mod
+
+            spatial_coords = spatial_loc_dict[section]
+            spatial_n = int(spatial_coords.shape[0]) if hasattr(spatial_coords, "shape") else len(spatial_coords)
+            if n_spots is not None and spatial_n != n_spots:
+                raise ValueError(
+                    f"Spatial coordinates for {section} have {spatial_n} rows, "
+                    f"but feature matrices have {n_spots} spots."
+                )
+
+            edge_index, edge_weight = compute_spatial_knn_graph_with_weights(
+                spatial_coords,
+                k=int(graph_cfg["knn_neighbors_spatial"]),
+                include_self_loop=True,
+                undirected=True,
+                delta=float(graph_sage_cfg["delta"]),
+                device=device,
+            )
+            spatial_graph_dict[section] = {
+                "edge_index": edge_index,
+                "edge_weight": edge_weight,
+            }
+
+            section_latents: dict[str, torch.Tensor] = {}
+            for modality in modality_order:
+                if modality not in self.encoders:
+                    raise KeyError(f"No encoder initialized for modality {modality}.")
+                section_latents[modality] = self.encoders[modality](section_features[modality])
+
+            section_crossview_loss, section_loss_details = compute_pairwise_cosie_crossview_loss(
+                section_latents,
+                gamma=contrastive_gamma,
+            )
+            crossview_loss = crossview_loss + section_crossview_loss
+            crossview_details[section] = section_loss_details
+            latent_dict[section] = section_latents
+            target_feature_dict[section] = section_features
+
+            fused = self.fusion_modules[combo_key](section_latents)
+            fused_embeddings[section] = fused
+
+            if graph_sage_cfg["enabled"]:
+                graphsage_embeddings[section] = self.graphsage(fused, edge_index, edge_weight)
+            else:
+                graphsage_embeddings[section] = fused
+
+        if self.config["uot"]["enabled"] and self.config["ot_attention"]["enabled"]:
+            if self.ot_prior is None:
+                self.initialize_ot_prior(feature_dict, section_order=resolved_order)
+                messages.append("Auto-initialized OT prior from preprocessed modality features.")
+        elif self.ot_prior is None:
+            self.ot_prior = {}
+
+        for source_section, target_section in zip(resolved_order[:-1], resolved_order[1:]):
+            prior = (self.ot_prior or {}).get((source_section, target_section))
+            if prior is None or not self.config["ot_attention"]["enabled"]:
+                final_embeddings[source_section] = graphsage_embeddings[source_section]
+                if prior is None:
+                    messages.append(f"No OT prior found for {source_section}->{target_section}; used GraphSAGE output.")
+                continue
+            final_embeddings[source_section] = self.ot_attention(
+                source_h=graphsage_embeddings[source_section],
+                target_h=graphsage_embeddings[target_section],
+                topk_idx=prior["topk_idx"],
+                topk_weight=prior["topk_weight"],
+                confidence=prior["confidence"],
+                epoch=epoch,
+            )
+
+        if resolved_order:
+            last_section = resolved_order[-1]
+            final_embeddings[last_section] = graphsage_embeddings[last_section]
+
+        if self.config["decoder"]["enabled"] and self.config["reconstruction"]["enabled"]:
+            for section in resolved_order:
+                section_recon = {}
+                for modality in target_feature_dict[section].keys():
+                    section_recon[modality] = self.decoders[modality](final_embeddings[section])
+                section_rec_loss, section_rec_details = compute_reconstruction_loss(
+                    section_recon,
+                    target_feature_dict[section],
+                    lambda_by_modality=lambda_by_modality,
+                )
+                reconstruction_loss = reconstruction_loss + section_rec_loss
+                reconstruction_details[section] = section_rec_details
+                reconstructions[section] = section_recon
+
+        total_loss = lambda_reconstruction * reconstruction_loss + lambda_contrast * crossview_loss
+
+        return {
+            "fused_embeddings": fused_embeddings,
+            "graphsage_embeddings": graphsage_embeddings,
+            "final_embeddings": final_embeddings,
+            "latent_dict": latent_dict,
+            "reconstructions": reconstructions,
+            "spatial_graph_dict": spatial_graph_dict,
+            "ot_prior": self.ot_prior,
+            "losses": {
+                "total_loss": total_loss,
+                "crossview_loss": crossview_loss,
+                "reconstruction_loss": reconstruction_loss,
+            },
+            "loss_details": {
+                "crossview": crossview_details,
+                "reconstruction": reconstruction_details,
+            },
+            "messages": messages,
+        }

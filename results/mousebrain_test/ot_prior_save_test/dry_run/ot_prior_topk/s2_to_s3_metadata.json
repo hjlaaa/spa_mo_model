@@ -1,0 +1,15 @@
+{
+  "source_section": "s2",
+  "target_section": "s3",
+  "topk": 10,
+  "n_source": 2820,
+  "n_target": 2662,
+  "modalities_used": [
+    "HE",
+    "RNA",
+    "Metabolite"
+  ],
+  "has_dense_P": false,
+  "run_mode": "dry_run",
+  "note": "Saved sparse top-k UOT prior from model.ot_prior after final evaluation."
+}

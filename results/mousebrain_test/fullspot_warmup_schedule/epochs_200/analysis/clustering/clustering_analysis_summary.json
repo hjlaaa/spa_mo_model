@@ -1,0 +1,152 @@
+{
+  "embedding_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings",
+  "config": "/home/hujinlan/spa_mo_model/data/configs/mousebrain_preprocess_train.json",
+  "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering",
+  "section_order": [
+    "s1",
+    "s2",
+    "s3"
+  ],
+  "cluster_list": [
+    5,
+    6,
+    8,
+    10
+  ],
+  "random_state": 0,
+  "spatial_key": "spatial",
+  "invert_y": true,
+  "inputs": {
+    "s1": {
+      "embedding_shape": [
+        2384,
+        128
+      ],
+      "spatial_shape": [
+        2384,
+        2
+      ],
+      "obs_names_count": 2384
+    },
+    "s2": {
+      "embedding_shape": [
+        2820,
+        128
+      ],
+      "spatial_shape": [
+        2820,
+        2
+      ],
+      "obs_names_count": 2820
+    },
+    "s3": {
+      "embedding_shape": [
+        2662,
+        128
+      ],
+      "spatial_shape": [
+        2662,
+        2
+      ],
+      "obs_names_count": 2662
+    }
+  },
+  "spatial_source_paths": {
+    "s1": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionA/adata_RNA.h5ad",
+    "s2": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionB/adata_RNA.h5ad",
+    "s3": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionC/adata_RNA.h5ad"
+  },
+  "joint": {
+    "5": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k5",
+      "composition_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k5/cluster_composition.csv",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k5/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k5/spatial_continuity.csv",
+      "max_section_fraction_by_cluster": [
+        0.4092526690391459,
+        0.36262719703977797,
+        0.3528801245459263,
+        0.3986062717770035,
+        0.3472222222222222
+      ],
+      "mean_spatial_neighbor_agreement": 0.8654292407372699
+    },
+    "6": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k6",
+      "composition_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k6/cluster_composition.csv",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k6/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k6/spatial_continuity.csv",
+      "max_section_fraction_by_cluster": [
+        0.4089184060721063,
+        0.36187845303867405,
+        0.3523908523908524,
+        0.3444730077120823,
+        0.40209424083769635,
+        0.3895870736086176
+      ],
+      "mean_spatial_neighbor_agreement": 0.8217439058988593
+    },
+    "8": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k8",
+      "composition_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k8/cluster_composition.csv",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k8/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k8/spatial_continuity.csv",
+      "max_section_fraction_by_cluster": [
+        0.4208289054197662,
+        0.35088633993743484,
+        0.42454954954954954,
+        0.3764172335600907,
+        0.37261146496815284,
+        0.3958333333333333,
+        0.362962962962963,
+        0.36
+      ],
+      "mean_spatial_neighbor_agreement": 0.7736764793103768
+    },
+    "10": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k10",
+      "composition_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k10/cluster_composition.csv",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k10/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k10/spatial_continuity.csv",
+      "max_section_fraction_by_cluster": [
+        0.39342723004694835,
+        0.4426229508196721,
+        0.42117117117117114,
+        0.3607068607068607,
+        0.4170673076923077,
+        0.3756177924217463,
+        0.37702871410736577,
+        0.36705882352941177,
+        0.4213362068965517,
+        0.3451015004413063
+      ],
+      "mean_spatial_neighbor_agreement": 0.7159187201585354
+    }
+  },
+  "independent": {
+    "5": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k5",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k5/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k5/spatial_continuity.csv",
+      "mean_spatial_neighbor_agreement": 0.8607841039476596
+    },
+    "6": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k6",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k6/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k6/spatial_continuity.csv",
+      "mean_spatial_neighbor_agreement": 0.8325991446484377
+    },
+    "8": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k8",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k8/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k8/spatial_continuity.csv",
+      "mean_spatial_neighbor_agreement": 0.791132480863756
+    },
+    "10": {
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k10",
+      "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k10/section_cluster_count.csv",
+      "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k10/spatial_continuity.csv",
+      "mean_spatial_neighbor_agreement": 0.7356794677080005
+    }
+  }
+}

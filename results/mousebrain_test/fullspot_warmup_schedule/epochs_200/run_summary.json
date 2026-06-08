@@ -1,0 +1,438 @@
+{
+  "mode": "train",
+  "epochs": 200,
+  "ot_updates": [
+    20,
+    40,
+    60,
+    80,
+    100,
+    120,
+    140,
+    160,
+    180,
+    200
+  ],
+  "preprocessing": {
+    "dataset_name": "MouseBrain",
+    "section_order": [
+      "s1",
+      "s2",
+      "s3"
+    ],
+    "max_spots_per_section": null,
+    "use_harmony": true,
+    "hvg_num_by_modality": {
+      "RNA": 3000,
+      "Metabolite": null
+    },
+    "lambda_contrast": 0.1,
+    "lambda_contrast_schedule": "1-5:1e-4,6-10:3e-4,11-15:1e-3,16-200:1e-2",
+    "device": "cuda",
+    "data_dict": {
+      "HE": [
+        {
+          "shape": [
+            2384,
+            2048
+          ],
+          "spatial_shape": [
+            2384,
+            2
+          ],
+          "obsm_keys": [
+            "spatial",
+            "HE_harmony"
+          ]
+        },
+        {
+          "shape": [
+            2820,
+            2048
+          ],
+          "spatial_shape": [
+            2820,
+            2
+          ],
+          "obsm_keys": [
+            "spatial",
+            "HE_harmony"
+          ]
+        },
+        {
+          "shape": [
+            2662,
+            2048
+          ],
+          "spatial_shape": [
+            2662,
+            2
+          ],
+          "obsm_keys": [
+            "spatial",
+            "HE_harmony"
+          ]
+        }
+      ],
+      "RNA": [
+        {
+          "shape": [
+            2384,
+            32285
+          ],
+          "spatial_shape": [
+            2384,
+            2
+          ],
+          "obsm_keys": [
+            "pxl_loc",
+            "pxl_loc_scale",
+            "spatial",
+            "spatial2",
+            "uni_feature",
+            "RNA_harmony"
+          ]
+        },
+        {
+          "shape": [
+            2820,
+            32285
+          ],
+          "spatial_shape": [
+            2820,
+            2
+          ],
+          "obsm_keys": [
+            "pxl_loc",
+            "pxl_loc_scale",
+            "spatial",
+            "spatial2",
+            "uni_feature",
+            "RNA_harmony"
+          ]
+        },
+        {
+          "shape": [
+            2662,
+            32285
+          ],
+          "spatial_shape": [
+            2662,
+            2
+          ],
+          "obsm_keys": [
+            "pxl_loc",
+            "pxl_loc_scale",
+            "spatial",
+            "spatial2",
+            "uni_feature",
+            "RNA_harmony"
+          ]
+        }
+      ],
+      "Protein": [
+        null,
+        null,
+        null
+      ],
+      "Metabolite": [
+        {
+          "shape": [
+            2384,
+            1538
+          ],
+          "spatial_shape": [
+            2384,
+            2
+          ],
+          "obsm_keys": [
+            "pxl_loc",
+            "pxl_loc_scale",
+            "spatial",
+            "spatial2",
+            "uni_feature",
+            "Metabolite_harmony"
+          ]
+        },
+        {
+          "shape": [
+            2820,
+            1538
+          ],
+          "spatial_shape": [
+            2820,
+            2
+          ],
+          "obsm_keys": [
+            "pxl_loc",
+            "pxl_loc_scale",
+            "spatial",
+            "spatial2",
+            "uni_feature",
+            "Metabolite_harmony"
+          ]
+        },
+        {
+          "shape": [
+            2662,
+            1538
+          ],
+          "spatial_shape": [
+            2662,
+            2
+          ],
+          "obsm_keys": [
+            "pxl_loc",
+            "pxl_loc_scale",
+            "spatial",
+            "spatial2",
+            "uni_feature",
+            "Metabolite_harmony"
+          ]
+        }
+      ]
+    },
+    "feature_dict": {
+      "s1": {
+        "HE": [
+          2384,
+          50
+        ],
+        "RNA": [
+          2384,
+          50
+        ],
+        "Metabolite": [
+          2384,
+          50
+        ]
+      },
+      "s2": {
+        "HE": [
+          2820,
+          50
+        ],
+        "RNA": [
+          2820,
+          50
+        ],
+        "Metabolite": [
+          2820,
+          50
+        ]
+      },
+      "s3": {
+        "HE": [
+          2662,
+          50
+        ],
+        "RNA": [
+          2662,
+          50
+        ],
+        "Metabolite": [
+          2662,
+          50
+        ]
+      }
+    },
+    "spatial_loc_dict": {
+      "s1": [
+        2384,
+        2
+      ],
+      "s2": [
+        2820,
+        2
+      ],
+      "s3": [
+        2662,
+        2
+      ]
+    },
+    "processed_data_dict_generated": true,
+    "alignment": {
+      "s1": {
+        "rna_spots": 2384,
+        "metabolite_spots": 2384,
+        "he_spots": 2384,
+        "obs_names_match": true,
+        "spatial_match": true,
+        "uni_feature_shape": [
+          2384,
+          2048
+        ],
+        "metabolite_feature_shape": [
+          2384,
+          1538
+        ],
+        "rna_feature_shape": [
+          2384,
+          32285
+        ]
+      },
+      "s2": {
+        "rna_spots": 2820,
+        "metabolite_spots": 2820,
+        "he_spots": 2820,
+        "obs_names_match": true,
+        "spatial_match": true,
+        "uni_feature_shape": [
+          2820,
+          2048
+        ],
+        "metabolite_feature_shape": [
+          2820,
+          1538
+        ],
+        "rna_feature_shape": [
+          2820,
+          32285
+        ]
+      },
+      "s3": {
+        "rna_spots": 2662,
+        "metabolite_spots": 2662,
+        "he_spots": 2662,
+        "obs_names_match": true,
+        "spatial_match": true,
+        "uni_feature_shape": [
+          2662,
+          2048
+        ],
+        "metabolite_feature_shape": [
+          2662,
+          1538
+        ],
+        "rna_feature_shape": [
+          2662,
+          32285
+        ]
+      }
+    },
+    "adapter_messages": [
+      "s1: HE built from obsm['uni_feature'] with shape (2384, 2048)",
+      "s1: RNA var_names set from var['gene_ids']",
+      "s1: Metabolite loaded with shape (2384, 1538)",
+      "s2: HE built from obsm['uni_feature'] with shape (2820, 2048)",
+      "s2: RNA var_names set from var['gene_ids']",
+      "s2: Metabolite loaded with shape (2820, 1538)",
+      "s3: HE built from obsm['uni_feature'] with shape (2662, 2048)",
+      "s3: RNA var_names set from var['gene_ids']",
+      "s3: Metabolite loaded with shape (2662, 1538)"
+    ]
+  },
+  "forward": {
+    "final_embeddings": {
+      "s1": [
+        2384,
+        128
+      ],
+      "s2": [
+        2820,
+        128
+      ],
+      "s3": [
+        2662,
+        128
+      ]
+    },
+    "fused_embeddings": {
+      "s1": [
+        2384,
+        128
+      ],
+      "s2": [
+        2820,
+        128
+      ],
+      "s3": [
+        2662,
+        128
+      ]
+    },
+    "graphsage_embeddings": {
+      "s1": [
+        2384,
+        128
+      ],
+      "s2": [
+        2820,
+        128
+      ],
+      "s3": [
+        2662,
+        128
+      ]
+    },
+    "reconstructions": {
+      "s1": {
+        "HE": [
+          2384,
+          50
+        ],
+        "RNA": [
+          2384,
+          50
+        ],
+        "Metabolite": [
+          2384,
+          50
+        ]
+      },
+      "s2": {
+        "HE": [
+          2820,
+          50
+        ],
+        "RNA": [
+          2820,
+          50
+        ],
+        "Metabolite": [
+          2820,
+          50
+        ]
+      },
+      "s3": {
+        "HE": [
+          2662,
+          50
+        ],
+        "RNA": [
+          2662,
+          50
+        ],
+        "Metabolite": [
+          2662,
+          50
+        ]
+      }
+    },
+    "ot_prior_keys": [
+      [
+        "s1",
+        "s2"
+      ],
+      [
+        "s2",
+        "s3"
+      ]
+    ],
+    "losses": {
+      "total_loss": 17.910316467285156,
+      "crossview_loss": -789.4046630859375,
+      "reconstruction_loss": 25.804363250732422
+    },
+    "messages": [
+      "processed_data_dict is accepted for pipeline compatibility but is not used by Model Stage V2."
+    ]
+  },
+  "loss_finite": true,
+  "config_copy": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/mousebrain_config_used.json",
+  "final_embedding_paths": {
+    "s1": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings/s1_final_embedding.npy",
+    "s2": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings/s2_final_embedding.npy",
+    "s3": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings/s3_final_embedding.npy"
+  }
+}
