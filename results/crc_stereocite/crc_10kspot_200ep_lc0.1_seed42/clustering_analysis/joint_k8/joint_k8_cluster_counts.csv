@@ -1,0 +1,17 @@
+mode,section,cluster,count,section_fraction
+joint,CRC_003,0,155,0.0155
+joint,CRC_003,1,51,0.0051
+joint,CRC_003,2,610,0.061
+joint,CRC_003,3,45,0.0045
+joint,CRC_003,4,487,0.0487
+joint,CRC_003,5,2958,0.2958
+joint,CRC_003,6,2949,0.2949
+joint,CRC_003,7,2745,0.2745
+joint,CRC_006,0,2063,0.2063
+joint,CRC_006,1,435,0.0435
+joint,CRC_006,2,1400,0.14
+joint,CRC_006,3,2108,0.2108
+joint,CRC_006,4,3164,0.3164
+joint,CRC_006,5,339,0.0339
+joint,CRC_006,6,134,0.0134
+joint,CRC_006,7,357,0.0357

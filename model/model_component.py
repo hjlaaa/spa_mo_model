@@ -73,7 +73,7 @@ class ModalityMLPEncoder(nn.Module):
 
 
 class FusionMLP(nn.Module):
-    """Fuse three modality latents into one 128-dimensional spot embedding.
+    """Fuse observed modality latents into one 128-dimensional spot embedding.
 
     This fusion module is a project-specific addition after COSIE-style
     cross-view alignment. COSIE's original final embedding keeps the
@@ -93,8 +93,8 @@ class FusionMLP(nn.Module):
         residual: str | None = "mean_residual",
     ):
         super().__init__()
-        if len(modality_order) != 3:
-            raise ValueError("FusionMLP expects exactly three modalities.")
+        if not (2 <= len(modality_order) <= 3):
+            raise ValueError("FusionMLP expects two or three observed modalities.")
         self.modality_order = list(modality_order)
         self.latent_dim = int(latent_dim)
         self.output_dim = int(output_dim)
@@ -167,6 +167,7 @@ class WeightedResidualGraphSAGE(nn.Module):
         activation: str = "GELU",
         norm: str | None = "LayerNorm",
         residual: bool = True,
+        edge_batch_size: int | None = 200000,
     ):
         super().__init__()
         if input_dim != output_dim and residual:
@@ -174,6 +175,7 @@ class WeightedResidualGraphSAGE(nn.Module):
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.residual = bool(residual)
+        self.edge_batch_size = None if edge_batch_size is None else int(edge_batch_size)
         self.self_linear = nn.Linear(self.input_dim, self.output_dim, bias=False)
         self.neigh_linear = nn.Linear(self.input_dim, self.output_dim, bias=False)
         self.bias = nn.Parameter(torch.zeros(self.output_dim))
@@ -186,6 +188,7 @@ class WeightedResidualGraphSAGE(nn.Module):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_weight: torch.Tensor,
+        edge_batch_size: int | None = None,
     ) -> torch.Tensor:
         if x.ndim != 2:
             raise ValueError(f"x must be 2D, got shape {tuple(x.shape)}.")
@@ -198,7 +201,19 @@ class WeightedResidualGraphSAGE(nn.Module):
         target = edge_index[1].to(x.device)
         weight = edge_weight.to(device=x.device, dtype=x.dtype)
         neigh = torch.zeros_like(x)
-        neigh.index_add_(0, source, x[target] * weight.unsqueeze(-1))
+        batch_size = self.edge_batch_size if edge_batch_size is None else edge_batch_size
+        if batch_size is None or int(batch_size) <= 0:
+            neigh.index_add_(0, source, x[target] * weight.unsqueeze(-1))
+        else:
+            batch_size = int(batch_size)
+            num_edges = int(source.shape[0])
+            for start in range(0, num_edges, batch_size):
+                end = min(start + batch_size, num_edges)
+                source_b = source[start:end]
+                target_b = target[start:end]
+                weight_b = weight[start:end]
+                msg_b = x[target_b] * weight_b.unsqueeze(-1)
+                neigh.index_add_(0, source_b, msg_b)
 
         out = self.activation(self.self_linear(x) + self.neigh_linear(neigh) + self.bias)
         out = self.dropout(out)

@@ -22,8 +22,7 @@ def compute_joint(view1: torch.Tensor, view2: torch.Tensor) -> torch.Tensor:
     bn, k = view1.size()
     assert view2.size(0) == bn and view2.size(1) == k
 
-    p_i_j = view1.unsqueeze(2) * view2.unsqueeze(1)
-    p_i_j = p_i_j.sum(dim=0)
+    p_i_j = torch.matmul(view1.transpose(0, 1), view2)
     p_i_j = (p_i_j + p_i_j.t()) / 2.0
     p_i_j = p_i_j / p_i_j.sum()
 

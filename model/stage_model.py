@@ -23,6 +23,10 @@ from .model_component import (
     OTGuidedAttention,
     WeightedResidualGraphSAGE,
 )
+from .sparse_uot import (
+    compute_initial_candidate_sparse_uot_prior,
+    update_candidate_sparse_uot_prior_from_embeddings,
+)
 from .utils import compute_spatial_knn_graph_with_weights
 
 
@@ -84,8 +88,13 @@ class StageMultiModalModel(nn.Module):
         super().__init__()
         self.config = _recursive_update(get_default_model_config(), config)
         self.latent_dim = int(self.config["model"]["latent_dim"])
+        self.canonical_modality_order = tuple(self.config["model"]["modalities_supported"])
         self.valid_modality_sets = [
-            tuple(modalities)
+            tuple(
+                modality
+                for modality in self.canonical_modality_order
+                if modality in set(modalities)
+            )
             for modalities in self.config["model"]["valid_modality_sets"]
         ]
         self.input_dims: dict[str, int] = {}
@@ -115,6 +124,7 @@ class StageMultiModalModel(nn.Module):
             activation=graph_cfg["activation"],
             norm=graph_cfg["norm"],
             residual=bool(graph_cfg["residual"]),
+            edge_batch_size=graph_cfg.get("edge_batch_size", 200000),
         )
 
         attn_cfg = self.config["ot_attention"]
@@ -155,14 +165,28 @@ class StageMultiModalModel(nn.Module):
         return list(section_order)
 
     def _resolve_modality_order(self, modalities: Mapping[str, Any] | set[str]) -> tuple[str, ...]:
-        present = set(modalities.keys()) if isinstance(modalities, Mapping) else set(modalities)
+        if isinstance(modalities, Mapping):
+            present = {modality for modality, value in modalities.items() if value is not None}
+        else:
+            present = set(modalities)
+        unknown = sorted(present - set(self.canonical_modality_order))
+        if unknown:
+            raise ValueError(f"Unsupported modalities present in section: {unknown}.")
+        if len(present) < 2:
+            raise ValueError(
+                f"Each section must contain at least two real observed modalities; got {sorted(present)}."
+            )
+
+        ordered_present = tuple(
+            modality for modality in self.canonical_modality_order if modality in present
+        )
         for valid_set in self.valid_modality_sets:
-            if present == set(valid_set):
-                return valid_set
+            if ordered_present == valid_set:
+                return ordered_present
         valid_text = ", ".join(self._combo_key(combo) for combo in self.valid_modality_sets)
         raise ValueError(
-            f"Each section must contain exactly one supported three-modality set. "
-            f"Got {sorted(present)}; supported sets are: {valid_text}."
+            f"Each section must contain exactly one supported two- or three-modality set. "
+            f"Got {list(ordered_present)}; supported sets are: {valid_text}."
             )
 
     @staticmethod
@@ -201,13 +225,23 @@ class StageMultiModalModel(nn.Module):
     ) -> None:
         """Create modality-specific encoders and decoders from feature shapes."""
 
+        expected_modality_order: tuple[str, ...] | None = None
         for section, modalities in feature_dict.items():
-            self._resolve_modality_order(modalities)
-            for modality, features in modalities.items():
+            modality_order = self._resolve_modality_order(modalities)
+            if expected_modality_order is None:
+                expected_modality_order = modality_order
+            elif modality_order != expected_modality_order:
+                raise ValueError(
+                    "All sections in one model run must use the same observed modality set; "
+                    f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
+                )
+
+            for modality in modality_order:
+                features = modalities[modality]
                 if features is None:
                     raise ValueError(
                         f"Missing modality {modality} in {section}; this stage "
-                        "expects complete HE+RNA+Protein or HE+RNA+Metabolite sections."
+                        "expects complete observed modalities for a supported set."
                     )
                 if not hasattr(features, "shape") or len(features.shape) != 2:
                     raise ValueError(
@@ -254,11 +288,21 @@ class StageMultiModalModel(nn.Module):
             self.ot_prior = {}
             return self.ot_prior
         resolved_order = self._resolve_section_order(feature_dict, section_order)
+        expected_modality_order: tuple[str, ...] | None = None
+        for section in resolved_order:
+            modality_order = self._resolve_modality_order(feature_dict[section])
+            if expected_modality_order is None:
+                expected_modality_order = modality_order
+            elif modality_order != expected_modality_order:
+                raise ValueError(
+                    "All sections used for OT prior initialization must use the same observed modality set; "
+                    f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
+                )
         uot_cfg = self.config["uot"]
         self.ot_prior = compute_initial_multimodal_uot_prior(
             feature_dict=feature_dict,
             section_order=resolved_order,
-            modalities=self.config["model"]["modalities_supported"],
+            modalities=expected_modality_order or self.config["model"]["modalities_supported"],
             epsilon_init=float(uot_cfg["epsilon_init"]),
             tau_a=float(uot_cfg["tau_a"]),
             tau_b=float(uot_cfg["tau_b"]),
@@ -270,6 +314,67 @@ class StageMultiModalModel(nn.Module):
             clip_cost_min=float(uot_cfg["clip_cost_min"]),
             clip_cost_max=float(uot_cfg["clip_cost_max"]),
             keep_dense=bool(uot_cfg.get("keep_dense", False)),
+        )
+        return self.ot_prior
+
+    @torch.no_grad()
+    def initialize_candidate_sparse_ot_prior(
+        self,
+        feature_dict: Mapping[str, Mapping[str, Any]],
+        section_order: Sequence[str] | None = None,
+        initial_modality_candidate_k: int = 100,
+        candidate_k: int = 200,
+        attention_topk: int = 10,
+        candidate_backend: str = "faiss_ivf",
+        faiss_nlist: int = 4096,
+        faiss_nprobe: int = 64,
+        faiss_device: str = "auto",
+        faiss_train_sample_size: int = 100000,
+        faiss_query_batch_size: int | None = 8192,
+        seed: int = 42,
+        epsilon: float = 0.05,
+        tau_a: float = 1.0,
+        tau_b: float = 1.0,
+        max_iter: int = 100,
+        stabilizer: float = 1e-8,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Initialize adjacent-stage candidate-sparse UOT priors."""
+
+        if not self.config["uot"]["enabled"]:
+            self.ot_prior = {}
+            return self.ot_prior
+        resolved_order = self._resolve_section_order(feature_dict, section_order)
+        expected_modality_order: tuple[str, ...] | None = None
+        for section in resolved_order:
+            modality_order = self._resolve_modality_order(feature_dict[section])
+            if expected_modality_order is None:
+                expected_modality_order = modality_order
+            elif modality_order != expected_modality_order:
+                raise ValueError(
+                    "All sections used for OT prior initialization must use the same observed modality set; "
+                    f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
+                )
+        device = self._select_device(feature_dict)
+        self.ot_prior = compute_initial_candidate_sparse_uot_prior(
+            feature_dict=feature_dict,
+            section_order=resolved_order,
+            modalities=expected_modality_order or self.config["model"]["modalities_supported"],
+            initial_modality_candidate_k=initial_modality_candidate_k,
+            candidate_k=candidate_k,
+            attention_topk=attention_topk,
+            candidate_backend=candidate_backend,
+            faiss_nlist=faiss_nlist,
+            faiss_nprobe=faiss_nprobe,
+            faiss_device=faiss_device,
+            faiss_train_sample_size=faiss_train_sample_size,
+            faiss_query_batch_size=faiss_query_batch_size,
+            seed=seed,
+            epsilon=epsilon,
+            tau_a=tau_a,
+            tau_b=tau_b,
+            max_iter=max_iter,
+            stabilizer=stabilizer,
+            device=device,
         )
         return self.ot_prior
 
@@ -299,6 +404,55 @@ class StageMultiModalModel(nn.Module):
             clip_cost_min=float(uot_cfg["clip_cost_min"]),
             clip_cost_max=float(uot_cfg["clip_cost_max"]),
             keep_dense=bool(uot_cfg.get("keep_dense", False)),
+        )
+        return self.ot_prior
+
+    @torch.no_grad()
+    def update_candidate_sparse_ot_prior(
+        self,
+        embedding_dict: Mapping[str, torch.Tensor],
+        section_order: Sequence[str] | None = None,
+        candidate_k: int = 200,
+        attention_topk: int = 10,
+        candidate_backend: str = "faiss_ivf",
+        faiss_nlist: int = 4096,
+        faiss_nprobe: int = 64,
+        faiss_device: str = "auto",
+        faiss_train_sample_size: int = 100000,
+        faiss_query_batch_size: int | None = 8192,
+        seed: int = 42,
+        epsilon: float = 0.05,
+        tau_a: float = 1.0,
+        tau_b: float = 1.0,
+        max_iter: int = 100,
+        stabilizer: float = 1e-8,
+        candidate_source: str = "fused",
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Refresh candidate-sparse UOT priors from fused/final embeddings."""
+
+        if not self.config["uot"]["enabled"]:
+            self.ot_prior = {}
+            return self.ot_prior
+        device = self._select_device({section: {"embedding": value} for section, value in embedding_dict.items()})
+        self.ot_prior = update_candidate_sparse_uot_prior_from_embeddings(
+            embedding_dict=embedding_dict,
+            section_order=section_order,
+            candidate_k=candidate_k,
+            attention_topk=attention_topk,
+            candidate_backend=candidate_backend,
+            faiss_nlist=faiss_nlist,
+            faiss_nprobe=faiss_nprobe,
+            faiss_device=faiss_device,
+            faiss_train_sample_size=faiss_train_sample_size,
+            faiss_query_batch_size=faiss_query_batch_size,
+            seed=seed,
+            epsilon=epsilon,
+            tau_a=tau_a,
+            tau_b=tau_b,
+            max_iter=max_iter,
+            stabilizer=stabilizer,
+            device=device,
+            candidate_source=candidate_source,
         )
         return self.ot_prior
 
@@ -347,6 +501,7 @@ class StageMultiModalModel(nn.Module):
         ]
         crossview_loss = torch.zeros((), device=device)
         reconstruction_loss = torch.zeros((), device=device)
+        expected_modality_order: tuple[str, ...] | None = None
 
         for section in resolved_order:
             if section not in spatial_loc_dict:
@@ -354,6 +509,13 @@ class StageMultiModalModel(nn.Module):
 
             modalities = feature_dict[section]
             modality_order = self._resolve_modality_order(modalities)
+            if expected_modality_order is None:
+                expected_modality_order = modality_order
+            elif modality_order != expected_modality_order:
+                raise ValueError(
+                    "All sections in one forward pass must use the same observed modality set; "
+                    f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
+                )
             combo_key = self._combo_key(modality_order)
 
             section_features: dict[str, torch.Tensor] = {}

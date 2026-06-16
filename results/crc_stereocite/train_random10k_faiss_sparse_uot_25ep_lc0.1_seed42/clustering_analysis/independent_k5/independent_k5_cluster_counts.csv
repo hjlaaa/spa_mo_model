@@ -1,0 +1,11 @@
+mode,section,cluster,count,section_fraction
+independent,CRC_003,0,1906,0.1906
+independent,CRC_003,1,2517,0.2517
+independent,CRC_003,2,880,0.088
+independent,CRC_003,3,2923,0.2923
+independent,CRC_003,4,1774,0.1774
+independent,CRC_006,0,1520,0.152
+independent,CRC_006,1,2833,0.2833
+independent,CRC_006,2,2071,0.2071
+independent,CRC_006,3,2123,0.2123
+independent,CRC_006,4,1453,0.1453

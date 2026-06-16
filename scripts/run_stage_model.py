@@ -39,17 +39,44 @@ def assert_finite_loss(outputs, case_name):
             raise AssertionError(f"{case_name}: {key} is not finite: {value}")
 
 
-def check_two_stage_case(case_name, feature_dict, spatial_loc_dict, third_modality):
+def fusion_input_dim(model, modality_order):
+    combo_key = "__".join(modality_order)
+    module = model.fusion_modules[combo_key]
+    for layer in module.network:
+        if isinstance(layer, torch.nn.Linear):
+            return layer.in_features
+    raise AssertionError(f"No Linear layer found in fusion module {combo_key}.")
+
+
+def check_two_section_case(case_name, feature_dict, spatial_loc_dict, modality_order):
     config = make_smoke_config()
     model = StageMultiModalModel(config=config, feature_dict=feature_dict)
+    expected_fusion_input_dim = 128 * len(modality_order)
+    actual_fusion_input_dim = fusion_input_dim(model, modality_order)
+    if actual_fusion_input_dim != expected_fusion_input_dim:
+        raise AssertionError(
+            f"{case_name}: fusion input dim {actual_fusion_input_dim}, "
+            f"expected {expected_fusion_input_dim}"
+        )
+
     outputs = model(
         feature_dict=feature_dict,
         spatial_loc_dict=spatial_loc_dict,
         processed_data_dict=None,
     )
 
-    for section, n_spots in {"s1": 80, "s2": 90}.items():
-        for modality in ["HE", "RNA", third_modality]:
+    expected_spots = {
+        section: int(next(value for value in modalities.values() if value is not None).shape[0])
+        for section, modalities in feature_dict.items()
+    }
+    for section, n_spots in expected_spots.items():
+        observed_recon_modalities = set(outputs["reconstructions"][section].keys())
+        if observed_recon_modalities != set(modality_order):
+            raise AssertionError(
+                f"{case_name}: {section} recon modalities {sorted(observed_recon_modalities)}, "
+                f"expected {sorted(modality_order)}"
+            )
+        for modality in modality_order:
             latent_shape = tuple(outputs["latent_dict"][section][modality].shape)
             if latent_shape != (n_spots, 128):
                 raise AssertionError(f"{case_name}: {section} {modality} latent {latent_shape}")
@@ -71,20 +98,31 @@ def check_two_stage_case(case_name, feature_dict, spatial_loc_dict, third_modali
         if graph["edge_weight"].ndim != 1:
             raise AssertionError(f"{case_name}: {section} edge_weight shape {graph['edge_weight'].shape}")
 
+    for unexpected in set(["HE", "RNA", "Protein", "Metabolite"]) - set(modality_order):
+        if unexpected in outputs["reconstructions"]["s1"]:
+            raise AssertionError(f"{case_name}: unexpected {unexpected} reconstruction")
+
     prior = outputs["ot_prior"][("s1", "s2")]
-    if tuple(prior["topk_idx"].shape) != (80, 10):
+    source_n = expected_spots["s1"]
+    if tuple(prior["topk_idx"].shape) != (source_n, 10):
         raise AssertionError(f"{case_name}: topk_idx shape {tuple(prior['topk_idx'].shape)}")
-    if tuple(prior["topk_weight"].shape) != (80, 10):
+    if tuple(prior["topk_weight"].shape) != (source_n, 10):
         raise AssertionError(f"{case_name}: topk_weight shape {tuple(prior['topk_weight'].shape)}")
-    if tuple(prior["confidence"].shape) != (80,):
+    if tuple(prior["confidence"].shape) != (source_n,):
         raise AssertionError(f"{case_name}: confidence shape {tuple(prior['confidence'].shape)}")
+    if list(prior["modalities_used"]) != list(modality_order):
+        raise AssertionError(
+            f"{case_name}: OT modalities_used {prior['modalities_used']}, expected {list(modality_order)}"
+        )
 
     assert_finite_loss(outputs, case_name)
     outputs["losses"]["total_loss"].backward()
 
     print(f"{case_name}: PASS")
-    print(f"  s1 latent/fused/graphsage/final: (80, 128)")
-    print(f"  s2 latent/fused/graphsage/final: (90, 128)")
+    print(f"  modality_order: {list(modality_order)}")
+    print(f"  fusion_input_dim: {actual_fusion_input_dim}")
+    for section, n_spots in expected_spots.items():
+        print(f"  {section} latent/fused/graphsage/final: ({n_spots}, 128)")
     print(f"  ot_prior keys: {list(outputs['ot_prior'].keys())}")
     print(f"  topk_idx: {tuple(prior['topk_idx'].shape)}")
     print(f"  topk_weight: {tuple(prior['topk_weight'].shape)}")
@@ -92,111 +130,252 @@ def check_two_stage_case(case_name, feature_dict, spatial_loc_dict, third_modali
     print(f"  total_loss: {float(outputs['losses']['total_loss'].detach().cpu())}")
 
 
-def check_three_stage_case():
-    torch.manual_seed(83)
-    rng = np.random.default_rng(83)
-    feature_dict = {
-        "s1": {
-            "HE": torch.randn(50, 50),
-            "RNA": torch.randn(50, 50),
-            "Protein": torch.randn(50, 20),
-        },
-        "s2": {
-            "HE": torch.randn(55, 50),
-            "RNA": torch.randn(55, 50),
-            "Protein": torch.randn(55, 20),
-        },
-        "s3": {
-            "HE": torch.randn(60, 50),
-            "RNA": torch.randn(60, 50),
-            "Protein": torch.randn(60, 20),
-        },
-    }
-    spatial_loc_dict = {
-        "s1": rng.random((50, 2)),
-        "s2": rng.random((55, 2)),
-        "s3": rng.random((60, 2)),
-    }
-    config = make_smoke_config()
-    model = StageMultiModalModel(config=config, feature_dict=feature_dict)
-    outputs = model(
-        feature_dict=feature_dict,
-        spatial_loc_dict=spatial_loc_dict,
-        section_order=["s1", "s2", "s3"],
-        epoch=1,
-    )
-    expected_keys = {("s1", "s2"), ("s2", "s3")}
-    if set(outputs["ot_prior"].keys()) != expected_keys:
-        raise AssertionError(f"three_stage: OT keys {outputs['ot_prior'].keys()}")
-    if not torch.allclose(outputs["final_embeddings"]["s3"], outputs["graphsage_embeddings"]["s3"]):
-        raise AssertionError("three_stage: last section should not receive OT attention")
-    for section, n_spots in {"s1": 50, "s2": 55, "s3": 60}.items():
-        if tuple(outputs["final_embeddings"][section].shape) != (n_spots, 128):
-            raise AssertionError(f"three_stage: {section} final shape mismatch")
-    assert_finite_loss(outputs, "three_stage")
-    outputs["losses"]["total_loss"].backward()
-    print("three_stage_forward_attention: PASS")
-    print(f"  ot_prior keys: {list(outputs['ot_prior'].keys())}")
-    print("  s3 final equals graphsage output: True")
+def expect_value_error(case_name, feature_dict, spatial_loc_dict, expected_text):
+    try:
+        model = StageMultiModalModel(config=make_smoke_config(), feature_dict=feature_dict)
+        model(
+            feature_dict=feature_dict,
+            spatial_loc_dict=spatial_loc_dict,
+            processed_data_dict=None,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if expected_text not in message:
+            raise AssertionError(
+                f"{case_name}: expected error containing {expected_text!r}, got {message!r}"
+            ) from exc
+        print(f"{case_name}: PASS")
+        print(f"  expected ValueError: {message}")
+        return
+    raise AssertionError(f"{case_name}: expected ValueError but forward succeeded.")
 
 
 def run_smoke_test() -> None:
     torch.manual_seed(8)
     rng = np.random.default_rng(8)
 
-    protein_feature_dict = {
+    rna_protein_feature_dict = {
+        "s1": {
+            "RNA": torch.randn(100, 50),
+            "Protein": torch.randn(100, 50),
+        },
+        "s2": {
+            "RNA": torch.randn(120, 50),
+            "Protein": torch.randn(120, 50),
+        },
+    }
+    rna_protein_spatial = {
+        "s1": rng.random((100, 2)),
+        "s2": rng.random((120, 2)),
+    }
+    check_two_section_case(
+        "RNA_Protein_two_modality",
+        rna_protein_feature_dict,
+        rna_protein_spatial,
+        modality_order=("RNA", "Protein"),
+    )
+
+    he_rna_feature_dict = {
         "s1": {
             "HE": torch.randn(80, 50),
             "RNA": torch.randn(80, 50),
-            "Protein": torch.randn(80, 20),
         },
         "s2": {
             "HE": torch.randn(90, 50),
             "RNA": torch.randn(90, 50),
-            "Protein": torch.randn(90, 20),
         },
     }
-    protein_spatial = {
+    he_rna_spatial = {
         "s1": rng.random((80, 2)),
         "s2": rng.random((90, 2)),
     }
-    check_two_stage_case(
-        "HE_RNA_Protein_two_stage",
-        protein_feature_dict,
-        protein_spatial,
-        third_modality="Protein",
+    check_two_section_case(
+        "HE_RNA_two_modality",
+        he_rna_feature_dict,
+        he_rna_spatial,
+        modality_order=("HE", "RNA"),
     )
 
-    metabolite_feature_dict = {
+    he_protein_feature_dict = {
         "s1": {
             "HE": torch.randn(80, 50),
-            "RNA": torch.randn(80, 50),
-            "Metabolite": torch.randn(80, 50),
+            "Protein": torch.randn(80, 50),
         },
         "s2": {
             "HE": torch.randn(90, 50),
-            "RNA": torch.randn(90, 50),
-            "Metabolite": torch.randn(90, 50),
+            "Protein": torch.randn(90, 50),
         },
     }
-    metabolite_spatial = {
+    he_protein_spatial = {
         "s1": rng.random((80, 2)),
         "s2": rng.random((90, 2)),
     }
-    check_two_stage_case(
-        "HE_RNA_Metabolite_two_stage",
-        metabolite_feature_dict,
-        metabolite_spatial,
-        third_modality="Metabolite",
+    check_two_section_case(
+        "HE_Protein_two_modality",
+        he_protein_feature_dict,
+        he_protein_spatial,
+        modality_order=("HE", "Protein"),
     )
 
-    check_three_stage_case()
+    mousebrain_like_feature_dict = {
+        "s1": {
+            "HE": torch.randn(100, 50),
+            "RNA": torch.randn(100, 50),
+            "Metabolite": torch.randn(100, 50),
+        },
+        "s2": {
+            "HE": torch.randn(120, 50),
+            "RNA": torch.randn(120, 50),
+            "Metabolite": torch.randn(120, 50),
+        },
+    }
+    mousebrain_like_spatial = {
+        "s1": rng.random((100, 2)),
+        "s2": rng.random((120, 2)),
+    }
+    check_two_section_case(
+        "HE_RNA_Metabolite_three_modality",
+        mousebrain_like_feature_dict,
+        mousebrain_like_spatial,
+        modality_order=("HE", "RNA", "Metabolite"),
+    )
+
+    none_he_feature_dict = {
+        "s1": {
+            "HE": None,
+            "RNA": torch.randn(100, 50),
+            "Protein": torch.randn(100, 50),
+        },
+        "s2": {
+            "HE": None,
+            "RNA": torch.randn(120, 50),
+            "Protein": torch.randn(120, 50),
+        },
+    }
+    none_he_spatial = {
+        "s1": rng.random((100, 2)),
+        "s2": rng.random((120, 2)),
+    }
+    check_two_section_case(
+        "RNA_Protein_with_HE_None",
+        none_he_feature_dict,
+        none_he_spatial,
+        modality_order=("RNA", "Protein"),
+    )
+
+    expect_value_error(
+        "invalid_single_modality",
+        {
+            "s1": {"RNA": torch.randn(40, 50)},
+            "s2": {"RNA": torch.randn(45, 50)},
+        },
+        {
+            "s1": rng.random((40, 2)),
+            "s2": rng.random((45, 2)),
+        },
+        "at least two",
+    )
+    expect_value_error(
+        "invalid_four_modality",
+        {
+            "s1": {
+                "HE": torch.randn(40, 50),
+                "RNA": torch.randn(40, 50),
+                "Protein": torch.randn(40, 50),
+                "Metabolite": torch.randn(40, 50),
+            },
+            "s2": {
+                "HE": torch.randn(45, 50),
+                "RNA": torch.randn(45, 50),
+                "Protein": torch.randn(45, 50),
+                "Metabolite": torch.randn(45, 50),
+            },
+        },
+        {
+            "s1": rng.random((40, 2)),
+            "s2": rng.random((45, 2)),
+        },
+        "supported two- or three-modality set",
+    )
+    expect_value_error(
+        "invalid_RNA_Protein_Metabolite",
+        {
+            "s1": {
+                "RNA": torch.randn(40, 50),
+                "Protein": torch.randn(40, 50),
+                "Metabolite": torch.randn(40, 50),
+            },
+            "s2": {
+                "RNA": torch.randn(45, 50),
+                "Protein": torch.randn(45, 50),
+                "Metabolite": torch.randn(45, 50),
+            },
+        },
+        {
+            "s1": rng.random((40, 2)),
+            "s2": rng.random((45, 2)),
+        },
+        "supported two- or three-modality set",
+    )
+    expect_value_error(
+        "invalid_inconsistent_section_modalities",
+        {
+            "s1": {
+                "RNA": torch.randn(40, 50),
+                "Protein": torch.randn(40, 50),
+            },
+            "s2": {
+                "HE": torch.randn(45, 50),
+                "RNA": torch.randn(45, 50),
+                "Protein": torch.randn(45, 50),
+            },
+        },
+        {
+            "s1": rng.random((40, 2)),
+            "s2": rng.random((45, 2)),
+        },
+        "same observed modality set",
+    )
+    expect_value_error(
+        "invalid_spot_count_mismatch",
+        {
+            "s1": {
+                "RNA": torch.randn(100, 50),
+                "Protein": torch.randn(99, 50),
+            },
+            "s2": {
+                "RNA": torch.randn(120, 50),
+                "Protein": torch.randn(120, 50),
+            },
+        },
+        {
+            "s1": rng.random((100, 2)),
+            "s2": rng.random((120, 2)),
+        },
+        "same spot count",
+    )
+    expect_value_error(
+        "invalid_feature_dim_mismatch",
+        {
+            "s1": {
+                "RNA": torch.randn(100, 50),
+                "Protein": torch.randn(100, 50),
+            },
+            "s2": {
+                "RNA": torch.randn(120, 60),
+                "Protein": torch.randn(120, 50),
+            },
+        },
+        {
+            "s1": rng.random((100, 2)),
+            "s2": rng.random((120, 2)),
+        },
+        "inconsistent input dimensions",
+    )
 
 
 def main() -> None:
     args = parse_args()
-    if not args.smoke_test:
-        raise SystemExit("Pass --smoke_test to run the synthetic model check.")
     run_smoke_test()
 
 

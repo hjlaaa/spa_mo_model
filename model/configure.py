@@ -90,6 +90,12 @@ def get_default_model_config():
             "latent_dim": 128,
             "modalities_supported": ["HE", "RNA", "Protein", "Metabolite"],
             "valid_modality_sets": [
+                ["HE", "RNA"],
+                ["HE", "Protein"],
+                ["HE", "Metabolite"],
+                ["RNA", "Protein"],
+                ["RNA", "Metabolite"],
+                ["Protein", "Metabolite"],
                 ["HE", "RNA", "Protein"],
                 ["HE", "RNA", "Metabolite"],
             ],
@@ -145,6 +151,7 @@ def get_default_model_config():
             "residual": True,
             "use_distance_weight": True,
             "delta": 1e-8,
+            "edge_batch_size": 200000,
         },
         "uot": {
             "enabled": True,
