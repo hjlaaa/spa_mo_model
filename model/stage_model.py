@@ -6,6 +6,7 @@ from typing import Any, Mapping, Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .configure import get_default_model_config
 from .linkage_construction import (
@@ -14,7 +15,6 @@ from .linkage_construction import (
 )
 from .loss import (
     compute_pairwise_cosie_crossview_loss,
-    compute_reconstruction_loss,
 )
 from .model_component import (
     FusionMLP,
@@ -101,6 +101,7 @@ class StageMultiModalModel(nn.Module):
         self.encoders = nn.ModuleDict()
         self.decoders = nn.ModuleDict()
         self.ot_prior: dict[tuple[str, str], dict[str, Any]] | None = None
+        self._spatial_graph_cache: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor]] = {}
 
         self.fusion_modules = nn.ModuleDict()
         for modality_order in self.valid_modality_sets:
@@ -276,6 +277,122 @@ class StageMultiModalModel(nn.Module):
         if isinstance(x, torch.Tensor):
             return x.to(device=device, dtype=torch.float32)
         return torch.as_tensor(x, dtype=torch.float32, device=device)
+
+    def clear_spatial_graph_cache(self) -> None:
+        """Clear cached CPU spatial KNN graphs."""
+
+        self._spatial_graph_cache.clear()
+
+    def _get_spatial_graph(
+        self,
+        section: str,
+        spatial_coords: Any,
+        graph_cfg: Mapping[str, Any],
+        graph_sage_cfg: Mapping[str, Any],
+        device: torch.device,
+        cache_spatial_graphs: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not cache_spatial_graphs:
+            return compute_spatial_knn_graph_with_weights(
+                spatial_coords,
+                k=int(graph_cfg["knn_neighbors_spatial"]),
+                include_self_loop=True,
+                undirected=True,
+                delta=float(graph_sage_cfg["delta"]),
+                device=device,
+            )
+
+        spatial_n = int(spatial_coords.shape[0]) if hasattr(spatial_coords, "shape") else len(spatial_coords)
+        cache_key = (
+            section,
+            spatial_n,
+            int(graph_cfg["knn_neighbors_spatial"]),
+            True,
+            True,
+            float(graph_sage_cfg["delta"]),
+        )
+        if cache_key not in self._spatial_graph_cache:
+            edge_index_cpu, edge_weight_cpu = compute_spatial_knn_graph_with_weights(
+                spatial_coords,
+                k=int(graph_cfg["knn_neighbors_spatial"]),
+                include_self_loop=True,
+                undirected=True,
+                delta=float(graph_sage_cfg["delta"]),
+                device=torch.device("cpu"),
+            )
+            self._spatial_graph_cache[cache_key] = (edge_index_cpu, edge_weight_cpu)
+
+        edge_index_cpu, edge_weight_cpu = self._spatial_graph_cache[cache_key]
+        return edge_index_cpu.to(device), edge_weight_cpu.to(device)
+
+    def _decode_and_reconstruct_section(
+        self,
+        section: str,
+        final_embedding: torch.Tensor,
+        target_features: Mapping[str, torch.Tensor],
+        lambda_by_modality: Mapping[str, float] | None,
+        decoder_chunk_size: int | None = None,
+        return_reconstructions: bool = True,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        if not target_features:
+            zero = torch.zeros((), device=final_embedding.device, dtype=final_embedding.dtype)
+            return zero, {}, {}
+
+        weights = lambda_by_modality or {}
+        chunk_size = int(decoder_chunk_size or 0)
+        total_loss = torch.zeros((), device=final_embedding.device, dtype=torch.float32)
+        detail: dict[str, torch.Tensor] = {}
+        reconstructions: dict[str, torch.Tensor] = {}
+
+        for modality, target in target_features.items():
+            if modality not in self.decoders:
+                raise KeyError(f"No decoder initialized for modality {modality}.")
+            target = target.to(device=final_embedding.device, dtype=final_embedding.dtype)
+
+            if chunk_size <= 0:
+                recon = self.decoders[modality](final_embedding)
+                if recon.shape != target.shape:
+                    raise ValueError(
+                        f"Reconstruction shape mismatch for {section}/{modality}: "
+                        f"recon={tuple(recon.shape)}, target={tuple(target.shape)}."
+                    )
+                loss = F.mse_loss(recon.float(), target.float())
+                if return_reconstructions:
+                    reconstructions[modality] = recon
+            else:
+                sqerr = torch.zeros((), device=final_embedding.device, dtype=torch.float32)
+                total_numel = 0
+                recon_chunks: list[torch.Tensor] = []
+                for start in range(0, int(final_embedding.shape[0]), chunk_size):
+                    end = min(start + chunk_size, int(final_embedding.shape[0]))
+                    recon_chunk = self.decoders[modality](final_embedding[start:end])
+                    target_chunk = target[start:end]
+                    if recon_chunk.shape != target_chunk.shape:
+                        raise ValueError(
+                            f"Reconstruction shape mismatch for {section}/{modality}: "
+                            f"recon={tuple(recon_chunk.shape)}, target={tuple(target_chunk.shape)}."
+                        )
+                    sqerr = sqerr + F.mse_loss(
+                        recon_chunk.float(),
+                        target_chunk.float(),
+                        reduction="sum",
+                    )
+                    total_numel += int(target_chunk.numel())
+                    if return_reconstructions:
+                        if torch.is_grad_enabled():
+                            recon_chunks.append(recon_chunk)
+                        else:
+                            recon_chunks.append(recon_chunk.detach().cpu())
+                if total_numel <= 0:
+                    raise ValueError(f"Empty reconstruction target for {section}/{modality}.")
+                loss = sqerr / float(total_numel)
+                if return_reconstructions:
+                    reconstructions[modality] = torch.cat(recon_chunks, dim=0)
+
+            detail[modality] = loss
+            total_loss = total_loss + float(weights.get(modality, 1.0)) * loss
+
+        return total_loss, detail, reconstructions
 
     def initialize_ot_prior(
         self,
@@ -463,6 +580,11 @@ class StageMultiModalModel(nn.Module):
         processed_data_dict: Any | None = None,
         section_order: Sequence[str] | None = None,
         epoch: int | None = None,
+        training_loss_only: bool = False,
+        return_full_outputs: bool = True,
+        decoder_chunk_size: int | None = None,
+        ot_attention_source_chunk_size: int | None = None,
+        cache_spatial_graphs: bool = False,
     ) -> dict[str, Any]:
         if self._looks_like_section_order(processed_data_dict):
             if section_order is None:
@@ -486,6 +608,7 @@ class StageMultiModalModel(nn.Module):
         lambda_contrast = float(self.config["loss"]["lambda_contrast"])
         lambda_reconstruction = float(self.config["loss"]["lambda_reconstruction"])
         lambda_by_modality = self.config["reconstruction"]["lambda_by_modality"]
+        keep_full_outputs = bool(return_full_outputs) and not bool(training_loss_only)
 
         fused_embeddings: dict[str, torch.Tensor] = {}
         graphsage_embeddings: dict[str, torch.Tensor] = {}
@@ -543,18 +666,19 @@ class StageMultiModalModel(nn.Module):
                     f"but feature matrices have {n_spots} spots."
                 )
 
-            edge_index, edge_weight = compute_spatial_knn_graph_with_weights(
-                spatial_coords,
-                k=int(graph_cfg["knn_neighbors_spatial"]),
-                include_self_loop=True,
-                undirected=True,
-                delta=float(graph_sage_cfg["delta"]),
+            edge_index, edge_weight = self._get_spatial_graph(
+                section=section,
+                spatial_coords=spatial_coords,
+                graph_cfg=graph_cfg,
+                graph_sage_cfg=graph_sage_cfg,
                 device=device,
+                cache_spatial_graphs=cache_spatial_graphs,
             )
-            spatial_graph_dict[section] = {
-                "edge_index": edge_index,
-                "edge_weight": edge_weight,
-            }
+            if keep_full_outputs:
+                spatial_graph_dict[section] = {
+                    "edge_index": edge_index,
+                    "edge_weight": edge_weight,
+                }
 
             section_latents: dict[str, torch.Tensor] = {}
             for modality in modality_order:
@@ -567,12 +691,14 @@ class StageMultiModalModel(nn.Module):
                 gamma=contrastive_gamma,
             )
             crossview_loss = crossview_loss + section_crossview_loss
-            crossview_details[section] = section_loss_details
-            latent_dict[section] = section_latents
+            if keep_full_outputs:
+                crossview_details[section] = section_loss_details
+                latent_dict[section] = section_latents
             target_feature_dict[section] = section_features
 
             fused = self.fusion_modules[combo_key](section_latents)
-            fused_embeddings[section] = fused
+            if keep_full_outputs:
+                fused_embeddings[section] = fused
 
             if graph_sage_cfg["enabled"]:
                 graphsage_embeddings[section] = self.graphsage(fused, edge_index, edge_weight)
@@ -600,6 +726,7 @@ class StageMultiModalModel(nn.Module):
                 topk_weight=prior["topk_weight"],
                 confidence=prior["confidence"],
                 epoch=epoch,
+                source_chunk_size=ot_attention_source_chunk_size,
             )
 
         if resolved_order:
@@ -608,19 +735,35 @@ class StageMultiModalModel(nn.Module):
 
         if self.config["decoder"]["enabled"] and self.config["reconstruction"]["enabled"]:
             for section in resolved_order:
-                section_recon = {}
-                for modality in target_feature_dict[section].keys():
-                    section_recon[modality] = self.decoders[modality](final_embeddings[section])
-                section_rec_loss, section_rec_details = compute_reconstruction_loss(
-                    section_recon,
-                    target_feature_dict[section],
+                section_rec_loss, section_rec_details, section_recon = self._decode_and_reconstruct_section(
+                    section=section,
+                    final_embedding=final_embeddings[section],
+                    target_features=target_feature_dict[section],
                     lambda_by_modality=lambda_by_modality,
+                    decoder_chunk_size=decoder_chunk_size,
+                    return_reconstructions=keep_full_outputs,
                 )
                 reconstruction_loss = reconstruction_loss + section_rec_loss
-                reconstruction_details[section] = section_rec_details
-                reconstructions[section] = section_recon
+                if keep_full_outputs:
+                    reconstruction_details[section] = section_rec_details
+                    reconstructions[section] = section_recon
 
         total_loss = lambda_reconstruction * reconstruction_loss + lambda_contrast * crossview_loss
+
+        if training_loss_only:
+            return {
+                "losses": {
+                    "total_loss": total_loss.float(),
+                    "crossview_loss": crossview_loss.float(),
+                    "reconstruction_loss": reconstruction_loss.float(),
+                },
+                "loss_scalars": {
+                    "total_loss": float(total_loss.detach().cpu().item()),
+                    "crossview_loss": float(crossview_loss.detach().cpu().item()),
+                    "reconstruction_loss": float(reconstruction_loss.detach().cpu().item()),
+                },
+                "messages": messages,
+            }
 
         return {
             "fused_embeddings": fused_embeddings,

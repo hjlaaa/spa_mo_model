@@ -10,10 +10,12 @@ processed h5ad files.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import re
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -111,6 +113,34 @@ def parse_args():
             "Lower this if GraphSAGE OOMs on full-spot runs."
         ),
     )
+    parser.add_argument(
+        "--training_loss_only",
+        action="store_true",
+        help="During train epochs, return only loss tensors/scalars instead of full graph-bearing outputs.",
+    )
+    parser.add_argument(
+        "--decoder_chunk_size",
+        type=int,
+        default=0,
+        help="If positive, compute decoder reconstruction loss in spot chunks.",
+    )
+    parser.add_argument(
+        "--ot_attention_source_chunk_size",
+        type=int,
+        default=0,
+        help="If positive, compute OT-guided attention in source-spot chunks.",
+    )
+    parser.add_argument(
+        "--amp_dtype",
+        choices=["none", "bf16", "fp16"],
+        default="none",
+        help="Optional CUDA autocast dtype for training forward. Default keeps full float32 behavior.",
+    )
+    parser.add_argument(
+        "--cache_spatial_graphs",
+        action="store_true",
+        help="Cache CPU spatial KNN graphs and move them to the target device in each forward.",
+    )
     parser.add_argument("--save_candidate_qc", action="store_true")
     parser.add_argument("--save_outputs", action="store_true", help="Save lightweight run outputs.")
     parser.add_argument("--save_embeddings", action="store_true", help="Save final embeddings when available.")
@@ -118,6 +148,11 @@ def parse_args():
         "--save_ot_prior_topk",
         action="store_true",
         help="Save sparse top-k OT prior when available. Dense P is never saved.",
+    )
+    parser.add_argument(
+        "--log_cuda_memory",
+        action="store_true",
+        help="Write per-stage CUDA memory statistics to cuda_memory_trace.jsonl in output_dir.",
     )
     parser.add_argument(
         "--output_dir",
@@ -149,6 +184,91 @@ def json_safe(value: Any):
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def bytes_to_gib(value: int | float | None) -> float | None:
+    if value is None:
+        return None
+    return float(value) / float(1024**3)
+
+
+def release_python_and_cuda_cache() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def amp_enabled(args) -> bool:
+    return bool(args.device == "cuda" and args.amp_dtype != "none")
+
+
+def autocast_context(args):
+    if not amp_enabled(args):
+        return nullcontext()
+    dtype = torch.bfloat16 if args.amp_dtype == "bf16" else torch.float16
+    return torch.autocast(device_type="cuda", dtype=dtype)
+
+
+def make_grad_scaler(args):
+    enabled = bool(args.device == "cuda" and args.amp_dtype == "fp16")
+    return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+class CudaMemoryMonitor:
+    """Append lightweight CUDA memory events to a JSONL file."""
+
+    def __init__(self, enabled: bool, output_dir: Path, requested_device: str):
+        self.enabled = bool(enabled)
+        self.requested_device = requested_device
+        self.output_path = output_dir / "cuda_memory_trace.jsonl"
+        self.event_count = 0
+        if self.enabled:
+            self.output_path.write_text("", encoding="utf-8")
+
+    def reset_peak(self) -> None:
+        if self.enabled and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+    def record(
+        self,
+        stage: str,
+        epoch: int | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            return {}
+
+        event: dict[str, Any] = {
+            "event_index": int(self.event_count),
+            "time_sec": float(time.time()),
+            "stage": str(stage),
+            "epoch": int(epoch) if epoch is not None else None,
+            "requested_device": self.requested_device,
+            "cuda_available": bool(torch.cuda.is_available()),
+        }
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            device_index = int(torch.cuda.current_device())
+            free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
+            event.update(
+                {
+                    "device_index": device_index,
+                    "device_name": torch.cuda.get_device_name(device_index),
+                    "allocated_gib": bytes_to_gib(torch.cuda.memory_allocated(device_index)),
+                    "reserved_gib": bytes_to_gib(torch.cuda.memory_reserved(device_index)),
+                    "max_allocated_gib": bytes_to_gib(torch.cuda.max_memory_allocated(device_index)),
+                    "max_reserved_gib": bytes_to_gib(torch.cuda.max_memory_reserved(device_index)),
+                    "free_gib": bytes_to_gib(free_bytes),
+                    "total_gib": bytes_to_gib(total_bytes),
+                }
+            )
+        if extra:
+            event.update(json_safe(dict(extra)))
+
+        with open(self.output_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(json_safe(event), ensure_ascii=False) + "\n")
+        self.event_count += 1
+        return event
 
 
 def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
@@ -437,6 +557,10 @@ def run_one_forward(
     processed_data_dict: Any,
     section_order: list[str],
     epoch: int,
+    training_loss_only: bool = False,
+    decoder_chunk_size: int = 0,
+    ot_attention_source_chunk_size: int = 0,
+    cache_spatial_graphs: bool = False,
 ) -> dict[str, Any]:
     return model(
         feature_dict=feature_dict,
@@ -444,6 +568,10 @@ def run_one_forward(
         processed_data_dict=processed_data_dict,
         section_order=section_order,
         epoch=epoch,
+        training_loss_only=training_loss_only,
+        decoder_chunk_size=decoder_chunk_size,
+        ot_attention_source_chunk_size=ot_attention_source_chunk_size,
+        cache_spatial_graphs=cache_spatial_graphs,
     )
 
 
@@ -519,6 +647,7 @@ def train_small_crc_model(
     processed_data_dict: Any,
     section_order: list[str],
     args,
+    memory_monitor: CudaMemoryMonitor | None = None,
 ) -> tuple[list[dict[str, float]], dict[str, Any], list[int]]:
     epochs = int(args.epochs)
     if epochs <= 0:
@@ -529,33 +658,100 @@ def train_small_crc_model(
         lr=float(args.lr),
         weight_decay=float(args.weight_decay),
     )
+    scaler = make_grad_scaler(args)
     history: list[dict[str, float]] = []
     ot_updates: list[int] = []
     for epoch in range(1, epochs + 1):
         start_time = time.time()
         model.train()
-        outputs = run_one_forward(
-            model,
-            feature_dict,
-            spatial_loc_dict,
-            processed_data_dict,
-            section_order,
-            epoch=epoch,
+        if memory_monitor is not None:
+            memory_monitor.record("epoch_start", epoch=epoch)
+            memory_monitor.reset_peak()
+            memory_monitor.record("epoch_forward_start", epoch=epoch)
+        with autocast_context(args):
+            outputs = run_one_forward(
+                model,
+                feature_dict,
+                spatial_loc_dict,
+                processed_data_dict,
+                section_order,
+                epoch=epoch,
+                training_loss_only=bool(args.training_loss_only),
+                decoder_chunk_size=int(args.decoder_chunk_size),
+                ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
+                cache_spatial_graphs=bool(args.cache_spatial_graphs),
+            )
+        forward_memory = (
+            memory_monitor.record("epoch_forward_end", epoch=epoch)
+            if memory_monitor is not None
+            else {}
         )
-        loss = outputs["losses"]["total_loss"]
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        loss = outputs["losses"]["total_loss"].float()
+        optimizer.zero_grad(set_to_none=True)
+        if memory_monitor is not None:
+            memory_monitor.reset_peak()
+            memory_monitor.record("epoch_backward_start", epoch=epoch)
+        if scaler.is_enabled():
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        backward_memory = (
+            memory_monitor.record("epoch_backward_end", epoch=epoch)
+            if memory_monitor is not None
+            else {}
+        )
+        if memory_monitor is not None:
+            memory_monitor.reset_peak()
+            memory_monitor.record("epoch_optimizer_step_start", epoch=epoch)
+        if scaler.is_enabled():
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        optimizer_memory = (
+            memory_monitor.record("epoch_optimizer_step_end", epoch=epoch)
+            if memory_monitor is not None
+            else {}
+        )
 
+        total_loss_value = float(loss.detach().cpu().item())
+        crossview_loss_value = float(outputs["losses"]["crossview_loss"].detach().cpu().item())
+        reconstruction_loss_value = float(outputs["losses"]["reconstruction_loss"].detach().cpu().item())
         record = {
             "epoch": int(epoch),
             "lambda_contrast": float(model.config["loss"]["lambda_contrast"]),
-            "total_loss": float(outputs["losses"]["total_loss"].detach().cpu()),
-            "crossview_loss": float(outputs["losses"]["crossview_loss"].detach().cpu()),
-            "reconstruction_loss": float(outputs["losses"]["reconstruction_loss"].detach().cpu()),
+            "total_loss": total_loss_value,
+            "crossview_loss": crossview_loss_value,
+            "reconstruction_loss": reconstruction_loss_value,
             "elapsed_time_sec": float(time.time() - start_time),
         }
         record["weighted_crossview_loss"] = record["lambda_contrast"] * record["crossview_loss"]
+        if memory_monitor is not None:
+            stage_events = [forward_memory, backward_memory, optimizer_memory]
+            record.update(
+                {
+                    "cuda_allocated_gib": optimizer_memory.get("allocated_gib"),
+                    "cuda_reserved_gib": optimizer_memory.get("reserved_gib"),
+                    "cuda_epoch_max_allocated_gib": max(
+                        (
+                            event.get("max_allocated_gib", 0.0) or 0.0
+                            for event in stage_events
+                        ),
+                        default=0.0,
+                    ),
+                    "cuda_epoch_max_reserved_gib": max(
+                        (
+                            event.get("max_reserved_gib", 0.0) or 0.0
+                            for event in stage_events
+                        ),
+                        default=0.0,
+                    ),
+                    "cuda_forward_max_allocated_gib": forward_memory.get("max_allocated_gib"),
+                    "cuda_backward_max_allocated_gib": backward_memory.get("max_allocated_gib"),
+                    "cuda_optimizer_max_allocated_gib": optimizer_memory.get("max_allocated_gib"),
+                }
+            )
         history.append(record)
 
         if args.log_every > 0 and (epoch == 1 or epoch % int(args.log_every) == 0 or epoch == epochs):
@@ -567,9 +763,20 @@ def train_small_crc_model(
                 f"reconstruction={record['reconstruction_loss']:.6f}"
             )
 
+        if memory_monitor is not None:
+            memory_monitor.record("epoch_cleanup_start", epoch=epoch)
+        del outputs
+        del loss
+        release_python_and_cuda_cache()
+        if memory_monitor is not None:
+            memory_monitor.record("epoch_cleanup_end", epoch=epoch)
+
         if should_update_ot(epoch, int(args.update_interval)):
             model.eval()
             with torch.no_grad():
+                if memory_monitor is not None:
+                    memory_monitor.reset_peak()
+                    memory_monitor.record("ot_update_forward_start", epoch=epoch)
                 eval_outputs = run_one_forward(
                     model,
                     feature_dict,
@@ -577,13 +784,29 @@ def train_small_crc_model(
                     processed_data_dict,
                     section_order,
                     epoch=epoch,
+                    decoder_chunk_size=int(args.decoder_chunk_size),
+                    ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
+                    cache_spatial_graphs=bool(args.cache_spatial_graphs),
                 )
+                if memory_monitor is not None:
+                    memory_monitor.record("ot_update_forward_end", epoch=epoch)
+                    memory_monitor.reset_peak()
+                    memory_monitor.record("ot_update_prior_start", epoch=epoch)
                 update_model_ot_prior(model, eval_outputs, section_order, args)
+                if memory_monitor is not None:
+                    memory_monitor.record("ot_update_prior_end", epoch=epoch)
+                del eval_outputs
+                release_python_and_cuda_cache()
+                if memory_monitor is not None:
+                    memory_monitor.record("ot_update_cleanup_end", epoch=epoch)
             ot_updates.append(epoch)
             print(f"Updated OT prior at epoch {epoch}.")
 
     model.eval()
     with torch.no_grad():
+        if memory_monitor is not None:
+            memory_monitor.reset_peak()
+            memory_monitor.record("final_eval_start", epoch=epochs)
         final_outputs = run_one_forward(
             model,
             feature_dict,
@@ -591,7 +814,12 @@ def train_small_crc_model(
             processed_data_dict,
             section_order,
             epoch=epochs,
+            decoder_chunk_size=int(args.decoder_chunk_size),
+            ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
+            cache_spatial_graphs=bool(args.cache_spatial_graphs),
         )
+        if memory_monitor is not None:
+            memory_monitor.record("final_eval_end", epoch=epochs)
     return history, final_outputs, ot_updates
 
 
@@ -616,6 +844,11 @@ def run_crc_pipeline(args) -> dict[str, Any]:
     ]:
         if int(getattr(args, name)) <= 0:
             raise ValueError(f"--{name} must be positive.")
+    for name in ["decoder_chunk_size", "ot_attention_source_chunk_size"]:
+        if int(getattr(args, name)) < 0:
+            raise ValueError(f"--{name} must be non-negative.")
+    if args.amp_dtype != "none" and args.device != "cuda":
+        raise ValueError("--amp_dtype can only be enabled with --device cuda.")
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -624,6 +857,12 @@ def run_crc_pipeline(args) -> dict[str, Any]:
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     ensure_dir(output_dir)
+    memory_monitor = CudaMemoryMonitor(
+        enabled=bool(args.log_cuda_memory),
+        output_dir=output_dir,
+        requested_device=args.device,
+    )
+    memory_monitor.record("script_start")
 
     backed_rna: dict[str, ad.AnnData] = {}
     backed_adt: dict[str, ad.AnnData] = {}
@@ -638,6 +877,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             backed_adt[section] = adt
             rna_info[section], duplicate_tables[section] = prepare_rna_var_names_make_unique(rna)
             alignment_summary[section] = validate_rna_adt_alignment(section, rna, adt)
+        memory_monitor.record("read_raw_h5ad_make_unique_validate_alignment")
 
         rna003 = backed_rna["CRC_003"]
         rna006 = backed_rna["CRC_006"]
@@ -665,6 +905,13 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             if bool(SUFFIX_RE.match(gene))
             and str(rna003_var_all.loc[gene, "gene_symbol_original"]) != gene
         ]
+        memory_monitor.record(
+            "shared_gene_alignment",
+            extra={
+                "shared_gene_count_total": int(len(shared_genes_all)),
+                "shared_gene_count_used": int(len(selected_shared_genes)),
+            },
+        )
 
         adt_markers_003 = list(map(str, backed_adt["CRC_003"].var_names))
         adt_markers_006 = list(map(str, backed_adt["CRC_006"].var_names))
@@ -681,6 +928,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             table.to_csv(output_dir / f"duplicate_gene_summary_{section}.csv", index=False)
         save_list(output_dir / "shared_gene_symbols_make_unique.txt", selected_shared_genes)
         save_list(output_dir / "adt_marker_list.txt", adt_markers_003)
+        memory_monitor.record("saved_lightweight_metadata")
 
         obs_indices = {
             section: select_obs_indices(
@@ -700,11 +948,29 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         saved_selected_spot_indices = {}
         if args.save_outputs:
             saved_selected_spot_indices = save_selected_spot_indices(output_dir, obs_indices, backed_rna)
+        memory_monitor.record(
+            "selected_spots",
+            extra={
+                "max_spots_per_section": int(args.max_spots_per_section)
+                if args.max_spots_per_section is not None
+                else None,
+                "spot_sampling": args.spot_sampling,
+            },
+        )
 
         rna003_mem = subset_to_memory(backed_rna["CRC_003"], obs_indices["CRC_003"], selected_shared_genes)
         rna006_mem = subset_to_memory(backed_rna["CRC_006"], obs_indices["CRC_006"], selected_shared_genes)
         adt003_mem = subset_to_memory(backed_adt["CRC_003"], obs_indices["CRC_003"], None)
         adt006_mem = subset_to_memory(backed_adt["CRC_006"], obs_indices["CRC_006"], None)
+        memory_monitor.record(
+            "loaded_selected_anndata_to_memory",
+            extra={
+                "rna_CRC_003_shape": list(rna003_mem.shape),
+                "rna_CRC_006_shape": list(rna006_mem.shape),
+                "adt_CRC_003_shape": list(adt003_mem.shape),
+                "adt_CRC_006_shape": list(adt006_mem.shape),
+            },
+        )
 
         if list(rna003_mem.var_names) != list(rna006_mem.var_names):
             raise ValueError("Subset RNA shared gene order is not identical after alignment.")
@@ -717,7 +983,10 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "HE": [None, None],
             "Metabolite": [None, None],
         }
+        memory_monitor.record("constructed_data_dict")
 
+        memory_monitor.reset_peak()
+        memory_monitor.record("cosie_preprocessing_start")
         feature_dict_raw, spatial_loc_dict_raw, processed_data_dict = load_cosie_style_data(
             data_dict,
             n_comps=args.n_comps,
@@ -731,6 +1000,13 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         feature_dict = rename_section_keys(feature_dict_raw)
         spatial_loc_dict = rename_section_keys(spatial_loc_dict_raw)
         section_order = ["CRC_003", "CRC_006"]
+        memory_monitor.record(
+            "cosie_preprocessing_end",
+            extra={
+                "feature_dict_shapes": summarize_feature_dict(feature_dict),
+                "spatial_loc_dict_shapes": summarize_spatial_loc_dict(spatial_loc_dict),
+            },
+        )
 
         model_config = get_default_model_config()
         model_config["training"]["device"] = args.device
@@ -748,12 +1024,18 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         model_config["uot"]["tol"] = 1e-5
         model_config["uot"]["update_interval"] = int(args.update_interval)
         model_config["graphsage"]["edge_batch_size"] = int(args.graphsage_edge_batch_size)
+        memory_monitor.reset_peak()
+        memory_monitor.record("model_init_start")
         model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
+        memory_monitor.record("model_init_end")
         resolved_modality_order = list(model._resolve_modality_order(feature_dict["CRC_003"]))
         if resolved_modality_order != ["RNA", "Protein"]:
             raise ValueError(f"Expected ['RNA', 'Protein'], got {resolved_modality_order}.")
 
+        memory_monitor.reset_peak()
+        memory_monitor.record("initial_ot_prior_start")
         initialize_model_ot_prior(model, feature_dict, section_order, args)
+        memory_monitor.record("initial_ot_prior_end")
         initial_prior = model.ot_prior[("CRC_003", "CRC_006")]
         initial_ot_modalities_used = list(initial_prior.get("modalities_used", []))
         if args.ot_prior_mode == "dense" and initial_ot_modalities_used != ["RNA", "Protein"]:
@@ -770,9 +1052,12 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 processed_data_dict,
                 section_order,
                 args,
+                memory_monitor=memory_monitor,
             )
         else:
             with torch.no_grad():
+                memory_monitor.reset_peak()
+                memory_monitor.record("dry_run_forward_start", epoch=0)
                 outputs = run_one_forward(
                     model,
                     feature_dict,
@@ -780,7 +1065,11 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                     processed_data_dict,
                     section_order,
                     epoch=0,
+                    decoder_chunk_size=int(args.decoder_chunk_size),
+                    ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
+                    cache_spatial_graphs=bool(args.cache_spatial_graphs),
                 )
+                memory_monitor.record("dry_run_forward_end", epoch=0)
 
         prior = outputs["ot_prior"][("CRC_003", "CRC_006")]
         reconstruction_keys = {
@@ -809,10 +1098,18 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         spatial_paths = {}
         ot_prior_topk_files = {}
         if args.save_embeddings:
+            memory_monitor.reset_peak()
+            memory_monitor.record("save_embeddings_start")
             embedding_paths = save_final_embeddings(output_dir, outputs["final_embeddings"])
+            memory_monitor.record("save_embeddings_end")
         if args.save_outputs:
+            memory_monitor.reset_peak()
+            memory_monitor.record("save_spatial_arrays_start")
             spatial_paths = save_spatial_arrays(output_dir, spatial_loc_dict)
+            memory_monitor.record("save_spatial_arrays_end")
         if args.save_ot_prior_topk:
+            memory_monitor.reset_peak()
+            memory_monitor.record("save_ot_prior_topk_start")
             ot_prior_topk_files = save_ot_prior_topk(
                 output_dir / "ot_prior_topk",
                 outputs.get("ot_prior"),
@@ -820,6 +1117,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 "training_final_eval" if args.train else "dry_run",
                 save_candidate_qc=bool(args.save_candidate_qc),
             )
+            memory_monitor.record("save_ot_prior_topk_end")
 
         sample_summaries = {}
         for section in section_order:
@@ -872,6 +1170,15 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "uot_tau_b": float(args.uot_tau_b),
             "uot_stabilizer": float(args.uot_stabilizer),
             "graphsage_edge_batch_size": int(args.graphsage_edge_batch_size),
+            "training_loss_only": bool(args.training_loss_only),
+            "decoder_chunk_size": int(args.decoder_chunk_size),
+            "ot_attention_source_chunk_size": int(args.ot_attention_source_chunk_size),
+            "amp_dtype": args.amp_dtype,
+            "amp_enabled": bool(amp_enabled(args)),
+            "cache_spatial_graphs": bool(args.cache_spatial_graphs),
+            "log_cuda_memory": bool(args.log_cuda_memory),
+            "cuda_memory_trace_path": str(memory_monitor.output_path) if args.log_cuda_memory else None,
+            "cuda_memory_event_count_before_summary": int(memory_monitor.event_count),
             "save_candidate_qc": bool(args.save_candidate_qc),
             "ot_prior_metadata": {
                 f"{source}_to_{target}": prior.get("metadata", {})
@@ -961,11 +1268,15 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 "max_shared_genes limits the dry-run gene list for speed and should be revisited for formal experiments.",
             ],
         }
+        memory_monitor.record("write_run_summary_start")
         with open(output_dir / "run_summary.json", "w", encoding="utf-8") as handle:
             json.dump(json_safe(summary), handle, indent=2, ensure_ascii=False)
         if history is not None:
+            memory_monitor.record("write_loss_history_start")
             with open(output_dir / "loss_history.json", "w", encoding="utf-8") as handle:
                 json.dump(json_safe(history), handle, indent=2, ensure_ascii=False)
+            memory_monitor.record("write_loss_history_end")
+        memory_monitor.record("write_run_summary_end")
 
         print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
         print("CRC_STEREOCITE_TRAIN: PASS" if args.train else "CRC_STEREOCITE_DRY_RUN: PASS")

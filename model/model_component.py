@@ -288,12 +288,48 @@ class OTGuidedAttention(nn.Module):
         topk_weight: torch.Tensor,
         confidence: torch.Tensor,
         epoch: int | None = None,
+        source_chunk_size: int | None = None,
     ) -> torch.Tensor:
         topk_idx = topk_idx.to(source_h.device)
         topk_weight = topk_weight.to(device=source_h.device, dtype=source_h.dtype)
         confidence = confidence.to(device=source_h.device, dtype=source_h.dtype)
         target_h = target_h.to(source_h.device)
 
+        if source_chunk_size is not None and int(source_chunk_size) > 0:
+            chunk_size = int(source_chunk_size)
+            chunks: list[torch.Tensor] = []
+            for start in range(0, int(source_h.shape[0]), chunk_size):
+                end = min(start + chunk_size, int(source_h.shape[0]))
+                chunks.append(
+                    self._forward_chunk(
+                        source_h=source_h[start:end],
+                        target_h=target_h,
+                        topk_idx=topk_idx[start:end],
+                        topk_weight=topk_weight[start:end],
+                        confidence=confidence[start:end],
+                        epoch=epoch,
+                    )
+                )
+            return torch.cat(chunks, dim=0)
+
+        return self._forward_chunk(
+            source_h=source_h,
+            target_h=target_h,
+            topk_idx=topk_idx,
+            topk_weight=topk_weight,
+            confidence=confidence,
+            epoch=epoch,
+        )
+
+    def _forward_chunk(
+        self,
+        source_h: torch.Tensor,
+        target_h: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weight: torch.Tensor,
+        confidence: torch.Tensor,
+        epoch: int | None = None,
+    ) -> torch.Tensor:
         q = self.W_Q(source_h)
         candidate_h = target_h[topk_idx]
         k = self.W_K(candidate_h)
@@ -301,8 +337,9 @@ class OTGuidedAttention(nn.Module):
 
         beta = self._current_beta(epoch)
         scores = (q.unsqueeze(1) * k).sum(dim=-1) / math.sqrt(self.d_attn)
-        scores = scores + beta * torch.log(topk_weight.clamp_min(self.delta))
-        alpha = torch.softmax(scores, dim=1)
+        log_prior = torch.log(topk_weight.float().clamp_min(self.delta))
+        scores = scores.float() + beta * log_prior
+        alpha = torch.softmax(scores, dim=1).to(v.dtype)
         message = (alpha.unsqueeze(-1) * v).sum(dim=1)
         message_bar = self.W_O(message)
 

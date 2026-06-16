@@ -1,0 +1,34 @@
+[
+  {
+    "epoch": 1,
+    "lambda_contrast": 0.1,
+    "total_loss": -61691.2578125,
+    "crossview_loss": -616995.25,
+    "reconstruction_loss": 8.269576072692871,
+    "elapsed_time_sec": 0.4821157455444336,
+    "weighted_crossview_loss": -61699.525,
+    "cuda_allocated_gib": null,
+    "cuda_reserved_gib": null,
+    "cuda_epoch_max_allocated_gib": 0.0,
+    "cuda_epoch_max_reserved_gib": 0.0,
+    "cuda_forward_max_allocated_gib": null,
+    "cuda_backward_max_allocated_gib": null,
+    "cuda_optimizer_max_allocated_gib": null
+  },
+  {
+    "epoch": 2,
+    "lambda_contrast": 0.1,
+    "total_loss": -72.55036926269531,
+    "crossview_loss": -806.4319458007812,
+    "reconstruction_loss": 8.092829704284668,
+    "elapsed_time_sec": 0.0473484992980957,
+    "weighted_crossview_loss": -80.64319458007813,
+    "cuda_allocated_gib": null,
+    "cuda_reserved_gib": null,
+    "cuda_epoch_max_allocated_gib": 0.0,
+    "cuda_epoch_max_reserved_gib": 0.0,
+    "cuda_forward_max_allocated_gib": null,
+    "cuda_backward_max_allocated_gib": null,
+    "cuda_optimizer_max_allocated_gib": null
+  }
+]

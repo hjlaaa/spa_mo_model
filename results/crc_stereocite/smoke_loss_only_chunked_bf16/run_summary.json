@@ -1,0 +1,536 @@
+{
+  "mode": "train",
+  "input_data_path": "/home/hujinlan/spa_mo_model/data/CRC_Stereo-CITE-seq",
+  "output_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16",
+  "section_names": [
+    "CRC_003",
+    "CRC_006"
+  ],
+  "preprocessing_generated_keys": [
+    "s1",
+    "s2"
+  ],
+  "section_key_mapping": {
+    "s1": "CRC_003",
+    "s2": "CRC_006"
+  },
+  "seed": 42,
+  "n_comps": 50,
+  "hvg_num": 3000,
+  "use_harmony": true,
+  "spot_sampling": "first",
+  "selected_obs_names_preview": {
+    "CRC_003": [
+      "45698452039180",
+      "43293270351760",
+      "55490977476780",
+      "52913997094340",
+      "50251117369440",
+      "40286793241240",
+      "29549375007880",
+      "49478023257980",
+      "36421322678560",
+      "30751965849940"
+    ],
+    "CRC_006": [
+      "63737314690380",
+      "60816736925860",
+      "55233279437660",
+      "77309411336240",
+      "71811853201080",
+      "67087389178520",
+      "73701638810160",
+      "59957743462220",
+      "74217034885000",
+      "63995012728220"
+    ]
+  },
+  "train": true,
+  "epochs": 2,
+  "lambda_contrast": 0.1,
+  "lr": 0.001,
+  "weight_decay": 0.0,
+  "update_interval": 20,
+  "ot_updates": [],
+  "uot_max_iter": 100,
+  "ot_prior_mode": "candidate_sparse",
+  "candidate_backend": "faiss_ivf",
+  "initial_modality_candidate_k": 20,
+  "candidate_k": 50,
+  "attention_topk": 10,
+  "faiss_nlist": 128,
+  "faiss_nprobe": 16,
+  "faiss_device": "auto",
+  "faiss_train_sample_size": 100000,
+  "faiss_query_batch_size": 8192,
+  "dynamic_candidate_source": "final",
+  "uot_epsilon": 0.05,
+  "uot_tau_a": 1.0,
+  "uot_tau_b": 1.0,
+  "uot_stabilizer": 1e-08,
+  "graphsage_edge_batch_size": 200000,
+  "training_loss_only": true,
+  "decoder_chunk_size": 200,
+  "ot_attention_source_chunk_size": 200,
+  "amp_dtype": "bf16",
+  "amp_enabled": true,
+  "cache_spatial_graphs": false,
+  "log_cuda_memory": false,
+  "cuda_memory_trace_path": null,
+  "cuda_memory_event_count_before_summary": 0,
+  "save_candidate_qc": false,
+  "ot_prior_metadata": {
+    "CRC_003_to_CRC_006": {
+      "ot_prior_mode": "candidate_sparse",
+      "candidate_source": "initial_modalities",
+      "modalities_used": [
+        "RNA",
+        "Protein"
+      ],
+      "modality_order": [
+        "RNA",
+        "Protein"
+      ],
+      "cost_definition": "mean_m(1 - cosine(z_source_m, z_target_m)) over candidate union",
+      "candidate_backend": "faiss_ivf",
+      "initial_modality_candidate_k": 20,
+      "candidate_k": 40,
+      "attention_topk": 10,
+      "faiss_nlist": 128,
+      "faiss_nprobe": 16,
+      "faiss_device": "auto",
+      "faiss_train_sample_size": 100000,
+      "faiss_query_batch_size": 8192,
+      "uot_epsilon": 0.05,
+      "uot_tau_a": 1.0,
+      "uot_tau_b": 1.0,
+      "uot_max_iter": 100,
+      "uot_stabilizer": 1e-08,
+      "candidate_search_metadata": {
+        "RNA": {
+          "backend": "faiss_ivf",
+          "requested_nlist": 128,
+          "requested_nprobe": 16,
+          "embedding_dim": 50,
+          "n_target": 1000,
+          "faiss_device_requested": "auto",
+          "effective_nlist": 124,
+          "effective_nprobe": 16,
+          "index_type": "IndexIVFFlat",
+          "requested_train_sample_size": 100000,
+          "effective_train_sample_size": 1000,
+          "train_sample_size": 1000,
+          "faiss_device_used": "gpu",
+          "candidate_k": 20,
+          "n_source": 1000,
+          "requested_query_batch_size": 8192,
+          "effective_query_batch_size": 1000,
+          "n_query_batches": 1,
+          "faiss_resources_released": true,
+          "cuda_empty_cache_after_faiss": true,
+          "candidate_search_time_sec": 0.3138902187347412
+        },
+        "Protein": {
+          "backend": "faiss_ivf",
+          "requested_nlist": 128,
+          "requested_nprobe": 16,
+          "embedding_dim": 50,
+          "n_target": 1000,
+          "faiss_device_requested": "auto",
+          "effective_nlist": 124,
+          "effective_nprobe": 16,
+          "index_type": "IndexIVFFlat",
+          "requested_train_sample_size": 100000,
+          "effective_train_sample_size": 1000,
+          "train_sample_size": 1000,
+          "faiss_device_used": "gpu",
+          "candidate_k": 20,
+          "n_source": 1000,
+          "requested_query_batch_size": 8192,
+          "effective_query_batch_size": 1000,
+          "n_query_batches": 1,
+          "faiss_resources_released": true,
+          "cuda_empty_cache_after_faiss": true,
+          "candidate_search_time_sec": 0.20343589782714844
+        }
+      },
+      "candidate_search_time_sec": 0.5173261165618896,
+      "sparse_uot_time_sec": 0.09847092628479004,
+      "total_prior_time_sec": 0.7192676067352295,
+      "candidate_target_unique_count": 1000,
+      "candidate_target_unique_coverage": 1.0,
+      "candidate_edge_count": 39591,
+      "candidate_target_hit_count_min": 3,
+      "candidate_target_hit_count_max": 427,
+      "candidate_target_hit_count_mean": 39.590999603271484
+    }
+  },
+  "rna_make_unique": {
+    "CRC_003": {
+      "original_shape": [
+        166279,
+        28592
+      ],
+      "var_names_unique_before": false,
+      "make_unique_gene_count": 28592,
+      "make_unique_var_names_is_unique": true,
+      "duplicate_gene_symbol_groups": 19,
+      "duplicate_extra_columns": 19,
+      "artificial_suffix_gene_count": 19,
+      "artificial_suffix_examples": [
+        "RGS5-1",
+        "PINX1-1",
+        "LINC01238-1",
+        "EMG1-1",
+        "CYB561D2-1",
+        "COG8-1",
+        "MATR3-1",
+        "PRSS50-1",
+        "HSPA14-1",
+        "SCO2-1",
+        "PDE11A-1",
+        "IGF2-1",
+        "CCDC39-1",
+        "DIABLO-1",
+        "TBCE-1",
+        "ATXN7-1",
+        "ABCF2-1",
+        "POLR2J3-1",
+        "SOD2-1"
+      ]
+    },
+    "CRC_006": {
+      "original_shape": [
+        446095,
+        31809
+      ],
+      "var_names_unique_before": false,
+      "make_unique_gene_count": 31809,
+      "make_unique_var_names_is_unique": true,
+      "duplicate_gene_symbol_groups": 20,
+      "duplicate_extra_columns": 20,
+      "artificial_suffix_gene_count": 20,
+      "artificial_suffix_examples": [
+        "RGS5-1",
+        "PINX1-1",
+        "LINC01238-1",
+        "EMG1-1",
+        "TMSB15B-1",
+        "CYB561D2-1",
+        "COG8-1",
+        "MATR3-1",
+        "PRSS50-1",
+        "HSPA14-1",
+        "SCO2-1",
+        "PDE11A-1",
+        "IGF2-1",
+        "CCDC39-1",
+        "DIABLO-1",
+        "TBCE-1",
+        "ATXN7-1",
+        "ABCF2-1",
+        "POLR2J3-1",
+        "SOD2-1"
+      ]
+    }
+  },
+  "shared_gene_count_total": 28430,
+  "shared_gene_count_used": 1000,
+  "shared_gene_artificial_suffix_count_total": 19,
+  "shared_gene_artificial_suffix_count_used": 0,
+  "shared_gene_artificial_suffix_examples": [
+    "RGS5-1",
+    "PINX1-1",
+    "LINC01238-1",
+    "EMG1-1",
+    "CYB561D2-1",
+    "COG8-1",
+    "MATR3-1",
+    "PRSS50-1",
+    "HSPA14-1",
+    "SCO2-1",
+    "PDE11A-1",
+    "IGF2-1",
+    "CCDC39-1",
+    "DIABLO-1",
+    "TBCE-1",
+    "ATXN7-1",
+    "ABCF2-1",
+    "POLR2J3-1",
+    "SOD2-1"
+  ],
+  "max_spots_per_section": 1000,
+  "max_shared_genes": 1000,
+  "protein_marker_count": 163,
+  "adt_var_names_unique": {
+    "CRC_003": true,
+    "CRC_006": true
+  },
+  "adt_marker_set_same": true,
+  "adt_marker_order_same": true,
+  "alignment": {
+    "CRC_003": {
+      "spot_count": 166279,
+      "obs_names_match": true,
+      "spatial_key_present": true,
+      "spatial_shape": [
+        166279,
+        2
+      ],
+      "spatial_match": true,
+      "spatial_range": {
+        "x": [
+          0.0,
+          515.0
+        ],
+        "y": [
+          0.0,
+          572.0
+        ]
+      },
+      "shared_rna_gene_count_total": 28430,
+      "shared_rna_gene_count_used": 1000,
+      "adt_marker_count": 163,
+      "subset_spot_count": 1000
+    },
+    "CRC_006": {
+      "spot_count": 446095,
+      "obs_names_match": true,
+      "spatial_key_present": true,
+      "spatial_shape": [
+        446095,
+        2
+      ],
+      "spatial_match": true,
+      "spatial_range": {
+        "x": [
+          0.0,
+          798.0
+        ],
+        "y": [
+          0.0,
+          884.0
+        ]
+      },
+      "shared_rna_gene_count_total": 28430,
+      "shared_rna_gene_count_used": 1000,
+      "adt_marker_count": 163,
+      "subset_spot_count": 1000
+    }
+  },
+  "data_dict": {
+    "RNA": [
+      {
+        "shape": [
+          1000,
+          1000
+        ],
+        "var_names_is_unique": true,
+        "obsm_keys": [
+          "spatial",
+          "spatial_original",
+          "RNA_harmony"
+        ]
+      },
+      {
+        "shape": [
+          1000,
+          1000
+        ],
+        "var_names_is_unique": true,
+        "obsm_keys": [
+          "original_spatial",
+          "spatial",
+          "RNA_harmony"
+        ]
+      }
+    ],
+    "Protein": [
+      {
+        "shape": [
+          1000,
+          163
+        ],
+        "var_names_is_unique": true,
+        "obsm_keys": [
+          "spatial",
+          "spatial_original",
+          "Protein_harmony"
+        ]
+      },
+      {
+        "shape": [
+          1000,
+          163
+        ],
+        "var_names_is_unique": true,
+        "obsm_keys": [
+          "original_spatial",
+          "spatial",
+          "Protein_harmony"
+        ]
+      }
+    ],
+    "HE": [
+      null,
+      null
+    ],
+    "Metabolite": [
+      null,
+      null
+    ]
+  },
+  "feature_dict_shapes": {
+    "CRC_003": {
+      "RNA": [
+        1000,
+        50
+      ],
+      "Protein": [
+        1000,
+        50
+      ]
+    },
+    "CRC_006": {
+      "RNA": [
+        1000,
+        50
+      ],
+      "Protein": [
+        1000,
+        50
+      ]
+    }
+  },
+  "spatial_loc_dict_shapes": {
+    "CRC_003": [
+      1000,
+      2
+    ],
+    "CRC_006": [
+      1000,
+      2
+    ]
+  },
+  "processed_data_dict_generated": true,
+  "continued_into_preprocessing": true,
+  "feature_dict_generated": true,
+  "model_initialized": true,
+  "initial_ot_prior_initialized": true,
+  "epoch_1_completed": true,
+  "epoch_2_completed": true,
+  "resolved_modality_order": [
+    "RNA",
+    "Protein"
+  ],
+  "final_embedding_shapes": {
+    "CRC_003": [
+      1000,
+      128
+    ],
+    "CRC_006": [
+      1000,
+      128
+    ]
+  },
+  "reconstruction_keys": {
+    "CRC_003": [
+      "Protein",
+      "RNA"
+    ],
+    "CRC_006": [
+      "Protein",
+      "RNA"
+    ]
+  },
+  "ot_prior_keys": [
+    [
+      "CRC_003",
+      "CRC_006"
+    ]
+  ],
+  "initial_ot_prior_modalities_used": {
+    "CRC_003_to_CRC_006": [
+      "RNA",
+      "Protein"
+    ]
+  },
+  "ot_prior_modalities_used": {
+    "CRC_003_to_CRC_006": [
+      "RNA",
+      "Protein"
+    ]
+  },
+  "losses": {
+    "total_loss": -19.735872268676758,
+    "crossview_loss": -276.6008605957031,
+    "reconstruction_loss": 7.92421293258667
+  },
+  "total_loss_finite": true,
+  "training_history": [
+    {
+      "epoch": 1,
+      "lambda_contrast": 0.1,
+      "total_loss": -61691.2578125,
+      "crossview_loss": -616995.25,
+      "reconstruction_loss": 8.269576072692871,
+      "elapsed_time_sec": 0.4821157455444336,
+      "weighted_crossview_loss": -61699.525,
+      "cuda_allocated_gib": null,
+      "cuda_reserved_gib": null,
+      "cuda_epoch_max_allocated_gib": 0.0,
+      "cuda_epoch_max_reserved_gib": 0.0,
+      "cuda_forward_max_allocated_gib": null,
+      "cuda_backward_max_allocated_gib": null,
+      "cuda_optimizer_max_allocated_gib": null
+    },
+    {
+      "epoch": 2,
+      "lambda_contrast": 0.1,
+      "total_loss": -72.55036926269531,
+      "crossview_loss": -806.4319458007812,
+      "reconstruction_loss": 8.092829704284668,
+      "elapsed_time_sec": 0.0473484992980957,
+      "weighted_crossview_loss": -80.64319458007813,
+      "cuda_allocated_gib": null,
+      "cuda_reserved_gib": null,
+      "cuda_epoch_max_allocated_gib": 0.0,
+      "cuda_epoch_max_reserved_gib": 0.0,
+      "cuda_forward_max_allocated_gib": null,
+      "cuda_backward_max_allocated_gib": null,
+      "cuda_optimizer_max_allocated_gib": null
+    }
+  ],
+  "saved_embeddings": false,
+  "saved_ot_prior_topk": false,
+  "ot_prior_topk_saved": false,
+  "ot_prior_topk_reason": "not requested",
+  "saved_files": {
+    "run_summary": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16/run_summary.json",
+    "loss_history": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16/loss_history.json",
+    "shared_gene_symbols_make_unique": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16/shared_gene_symbols_make_unique.txt",
+    "adt_marker_list": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16/adt_marker_list.txt",
+    "duplicate_gene_summary_CRC_003": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16/duplicate_gene_summary_CRC_003.csv",
+    "duplicate_gene_summary_CRC_006": "/home/hujinlan/spa_mo_model/results/crc_stereocite/smoke_loss_only_chunked_bf16/duplicate_gene_summary_CRC_006.csv",
+    "selected_spot_indices": {},
+    "spatial": {},
+    "final_embeddings": {},
+    "ot_prior_topk": {}
+  },
+  "confirmations": {
+    "saved_processed_h5ad": false,
+    "overwrote_original_h5ad": false,
+    "created_processed_data_directory": false,
+    "fabricated_HE": false,
+    "fabricated_Metabolite": false,
+    "adt_used_as_Protein": true,
+    "adt_used_as_Metabolite": false,
+    "count_aggregation_performed": false,
+    "full_crc_uot_constructed": false
+  },
+  "notes": [
+    "Suffixes such as MATR3-1 and ABCF2-1 are engineering names generated by AnnData var_names_make_unique(); they are not biological gene IDs.",
+    "selected shared genes follow CRC_003 make_unique order.",
+    "max_shared_genes limits the dry-run gene list for speed and should be revisited for formal experiments."
+  ]
+}

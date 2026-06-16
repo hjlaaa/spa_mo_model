@@ -44,6 +44,8 @@ def crossview_contrastive_Loss(
     matrix.
     """
 
+    view1 = view1.float()
+    view2 = view2.float()
     _, k = view1.size()
     p_i_j = compute_joint(view1, view2)
     assert p_i_j.size() == (k, k)
