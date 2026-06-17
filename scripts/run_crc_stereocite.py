@@ -139,6 +139,14 @@ def parse_args():
         help="If positive, compute OT-guided attention in source-spot chunks.",
     )
     parser.add_argument(
+        "--checkpoint_ot_attention",
+        action="store_true",
+        help=(
+            "Activation-checkpoint each OT-guided attention source chunk during training. "
+            "This trades extra backward recomputation time for lower activation memory."
+        ),
+    )
+    parser.add_argument(
         "--amp_dtype",
         choices=["none", "bf16", "fp16"],
         default="none",
@@ -161,6 +169,14 @@ def parse_args():
         "--log_cuda_memory",
         action="store_true",
         help="Write per-stage CUDA memory statistics to cuda_memory_trace.jsonl in output_dir.",
+    )
+    parser.add_argument(
+        "--log_cuda_memory_detail",
+        action="store_true",
+        help=(
+            "Add optional in-forward CUDA memory detail events to cuda_memory_trace.jsonl. "
+            "This is diagnostic-only and implies --log_cuda_memory."
+        ),
     )
     parser.add_argument(
         "--output_dir",
@@ -277,6 +293,21 @@ class CudaMemoryMonitor:
             handle.write(json.dumps(json_safe(event), ensure_ascii=False) + "\n")
         self.event_count += 1
         return event
+
+
+def make_forward_memory_recorder(
+    memory_monitor: CudaMemoryMonitor | None,
+    enabled: bool,
+    epoch: int,
+    phase: str,
+):
+    if memory_monitor is None or not enabled or not memory_monitor.enabled:
+        return None
+
+    def record_forward_detail(stage: str, extra: Mapping[str, Any] | None = None) -> None:
+        memory_monitor.record(f"{phase}_detail_{stage}", epoch=epoch, extra=extra)
+
+    return record_forward_detail
 
 
 def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
@@ -571,6 +602,8 @@ def run_one_forward(
     ot_attention_source_chunk_size: int = 0,
     cache_spatial_graphs: bool = False,
     bidirectional_ot_attention: bool = False,
+    checkpoint_ot_attention: bool = False,
+    memory_recorder=None,
 ) -> dict[str, Any]:
     return model(
         feature_dict=feature_dict,
@@ -583,6 +616,8 @@ def run_one_forward(
         ot_attention_source_chunk_size=ot_attention_source_chunk_size,
         cache_spatial_graphs=cache_spatial_graphs,
         bidirectional_ot_attention=bidirectional_ot_attention,
+        checkpoint_ot_attention=checkpoint_ot_attention,
+        memory_recorder=memory_recorder,
     )
 
 
@@ -694,6 +729,13 @@ def train_small_crc_model(
                 ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                 cache_spatial_graphs=bool(args.cache_spatial_graphs),
                 bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
+                checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+                memory_recorder=make_forward_memory_recorder(
+                    memory_monitor,
+                    bool(args.log_cuda_memory_detail),
+                    epoch,
+                    "train_forward",
+                ),
             )
         forward_memory = (
             memory_monitor.record("epoch_forward_end", epoch=epoch)
@@ -802,6 +844,13 @@ def train_small_crc_model(
                     ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
                     bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
+                    checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+                    memory_recorder=make_forward_memory_recorder(
+                        memory_monitor,
+                        bool(args.log_cuda_memory_detail),
+                        epoch,
+                        "ot_update_forward",
+                    ),
                 )
                 if memory_monitor is not None:
                     memory_monitor.record("ot_update_forward_end", epoch=epoch)
@@ -833,6 +882,13 @@ def train_small_crc_model(
             ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
             cache_spatial_graphs=bool(args.cache_spatial_graphs),
             bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
+            checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+            memory_recorder=make_forward_memory_recorder(
+                memory_monitor,
+                bool(args.log_cuda_memory_detail),
+                epochs,
+                "final_eval_forward",
+            ),
         )
         if memory_monitor is not None:
             memory_monitor.record("final_eval_end", epoch=epochs)
@@ -865,6 +921,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             raise ValueError(f"--{name} must be non-negative.")
     if args.amp_dtype != "none" and args.device != "cuda":
         raise ValueError("--amp_dtype can only be enabled with --device cuda.")
+    if args.log_cuda_memory_detail:
+        args.log_cuda_memory = True
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -1090,6 +1148,13 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                     ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
                     bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
+                    checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+                    memory_recorder=make_forward_memory_recorder(
+                        memory_monitor,
+                        bool(args.log_cuda_memory_detail),
+                        0,
+                        "dry_run_forward",
+                    ),
                 )
                 memory_monitor.record("dry_run_forward_end", epoch=0)
 
@@ -1204,10 +1269,12 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "training_loss_only": bool(args.training_loss_only),
             "decoder_chunk_size": int(args.decoder_chunk_size),
             "ot_attention_source_chunk_size": int(args.ot_attention_source_chunk_size),
+            "checkpoint_ot_attention": bool(args.checkpoint_ot_attention),
             "amp_dtype": args.amp_dtype,
             "amp_enabled": bool(amp_enabled(args)),
             "cache_spatial_graphs": bool(args.cache_spatial_graphs),
             "log_cuda_memory": bool(args.log_cuda_memory),
+            "log_cuda_memory_detail": bool(args.log_cuda_memory_detail),
             "cuda_memory_trace_path": str(memory_monitor.output_path) if args.log_cuda_memory else None,
             "cuda_memory_event_count_before_summary": int(memory_monitor.event_count),
             "save_candidate_qc": bool(args.save_candidate_qc),

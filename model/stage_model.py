@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import torch
 import torch.nn as nn
@@ -41,6 +41,18 @@ def _recursive_update(base: dict[str, Any], updates: Mapping[str, Any] | None) -
         else:
             base[key] = value
     return base
+
+
+ForwardMemoryRecorder = Callable[[str, Any], None]
+
+
+def _record_forward_memory(
+    recorder: ForwardMemoryRecorder | None,
+    stage: str,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    if recorder is not None:
+        recorder(stage, extra)
 
 
 def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
@@ -335,6 +347,7 @@ class StageMultiModalModel(nn.Module):
         lambda_by_modality: Mapping[str, float] | None,
         decoder_chunk_size: int | None = None,
         return_reconstructions: bool = True,
+        memory_recorder: ForwardMemoryRecorder | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         if not target_features:
             zero = torch.zeros((), device=final_embedding.device, dtype=final_embedding.dtype)
@@ -393,6 +406,18 @@ class StageMultiModalModel(nn.Module):
 
             detail[modality] = loss
             total_loss = total_loss + float(weights.get(modality, 1.0)) * loss
+            _record_forward_memory(
+                memory_recorder,
+                f"decoder_{section}_{modality}_end",
+                {
+                    "section": section,
+                    "modality": modality,
+                    "n_spots": int(final_embedding.shape[0]),
+                    "output_dim": int(target.shape[1]),
+                    "decoder_chunk_size": chunk_size,
+                    "return_reconstructions": bool(return_reconstructions),
+                },
+            )
 
         return total_loss, detail, reconstructions
 
@@ -600,6 +625,8 @@ class StageMultiModalModel(nn.Module):
         ot_attention_source_chunk_size: int | None = None,
         cache_spatial_graphs: bool = False,
         bidirectional_ot_attention: bool = False,
+        checkpoint_ot_attention: bool = False,
+        memory_recorder: ForwardMemoryRecorder | None = None,
     ) -> dict[str, Any]:
         if self._looks_like_section_order(processed_data_dict):
             if section_order is None:
@@ -640,6 +667,17 @@ class StageMultiModalModel(nn.Module):
         crossview_loss = torch.zeros((), device=device)
         reconstruction_loss = torch.zeros((), device=device)
         expected_modality_order: tuple[str, ...] | None = None
+        _record_forward_memory(
+            memory_recorder,
+            "start",
+            {
+                "sections": list(resolved_order),
+                "training_loss_only": bool(training_loss_only),
+                "return_full_outputs": bool(return_full_outputs),
+                "bidirectional_ot_attention": bool(bidirectional_ot_attention),
+                "checkpoint_ot_attention": bool(checkpoint_ot_attention),
+            },
+        )
 
         for section in resolved_order:
             if section not in spatial_loc_dict:
@@ -672,6 +710,19 @@ class StageMultiModalModel(nn.Module):
                         f"got {modality} with {x_mod.shape[0]} vs {n_spots}."
                     )
                 section_features[modality] = x_mod
+            _record_forward_memory(
+                memory_recorder,
+                f"section_{section}_features_end",
+                {
+                    "section": section,
+                    "n_spots": int(n_spots or 0),
+                    "modalities": list(modality_order),
+                    "feature_shapes": {
+                        modality: list(section_features[modality].shape)
+                        for modality in modality_order
+                    },
+                },
+            )
 
             spatial_coords = spatial_loc_dict[section]
             spatial_n = int(spatial_coords.shape[0]) if hasattr(spatial_coords, "shape") else len(spatial_coords)
@@ -689,6 +740,15 @@ class StageMultiModalModel(nn.Module):
                 device=device,
                 cache_spatial_graphs=cache_spatial_graphs,
             )
+            _record_forward_memory(
+                memory_recorder,
+                f"section_{section}_spatial_graph_end",
+                {
+                    "section": section,
+                    "edge_count": int(edge_index.shape[1]),
+                    "cache_spatial_graphs": bool(cache_spatial_graphs),
+                },
+            )
             if keep_full_outputs:
                 spatial_graph_dict[section] = {
                     "edge_index": edge_index,
@@ -700,18 +760,37 @@ class StageMultiModalModel(nn.Module):
                 if modality not in self.encoders:
                     raise KeyError(f"No encoder initialized for modality {modality}.")
                 section_latents[modality] = self.encoders[modality](section_features[modality])
+                _record_forward_memory(
+                    memory_recorder,
+                    f"section_{section}_encoder_{modality}_end",
+                    {
+                        "section": section,
+                        "modality": modality,
+                        "latent_shape": list(section_latents[modality].shape),
+                    },
+                )
 
             section_crossview_loss, section_loss_details = compute_pairwise_cosie_crossview_loss(
                 section_latents,
                 gamma=contrastive_gamma,
             )
             crossview_loss = crossview_loss + section_crossview_loss
+            _record_forward_memory(
+                memory_recorder,
+                f"section_{section}_crossview_end",
+                {"section": section, "modalities": list(modality_order)},
+            )
             if keep_full_outputs:
                 crossview_details[section] = section_loss_details
                 latent_dict[section] = section_latents
             target_feature_dict[section] = section_features
 
             fused = self.fusion_modules[combo_key](section_latents)
+            _record_forward_memory(
+                memory_recorder,
+                f"section_{section}_fusion_end",
+                {"section": section, "fused_shape": list(fused.shape)},
+            )
             if keep_full_outputs:
                 fused_embeddings[section] = fused
 
@@ -719,6 +798,15 @@ class StageMultiModalModel(nn.Module):
                 graphsage_embeddings[section] = self.graphsage(fused, edge_index, edge_weight)
             else:
                 graphsage_embeddings[section] = fused
+            _record_forward_memory(
+                memory_recorder,
+                f"section_{section}_graphsage_end",
+                {
+                    "section": section,
+                    "graphsage_enabled": bool(graph_sage_cfg["enabled"]),
+                    "graphsage_shape": list(graphsage_embeddings[section].shape),
+                },
+            )
 
         if self.config["uot"]["enabled"] and self.config["ot_attention"]["enabled"]:
             if self.ot_prior is None:
@@ -740,6 +828,19 @@ class StageMultiModalModel(nn.Module):
                     confidence=prior["confidence"],
                     epoch=epoch,
                     source_chunk_size=ot_attention_source_chunk_size,
+                    checkpoint_attention=checkpoint_ot_attention,
+                )
+                _record_forward_memory(
+                    memory_recorder,
+                    f"ot_attention_update_{source_section}_from_{target_section}_end",
+                    {
+                        "source_section": source_section,
+                        "target_section": target_section,
+                        "source_spots": int(graphsage_embeddings[source_section].shape[0]),
+                        "target_spots": int(graphsage_embeddings[target_section].shape[0]),
+                        "source_chunk_size": int(ot_attention_source_chunk_size or 0),
+                        "checkpoint_ot_attention": bool(checkpoint_ot_attention),
+                    },
                 )
                 update_lists[source_section].append(update)
 
@@ -752,6 +853,11 @@ class StageMultiModalModel(nn.Module):
                     final_embeddings[section] = self.ot_attention.apply_update(
                         graphsage_embeddings[section],
                         mean_update,
+                    )
+                    _record_forward_memory(
+                        memory_recorder,
+                        f"ot_attention_apply_{section}_end",
+                        {"section": section, "update_count": int(len(update_lists[section]))},
                     )
                 else:
                     final_embeddings[section] = graphsage_embeddings[section]
@@ -772,11 +878,34 @@ class StageMultiModalModel(nn.Module):
                     confidence=prior["confidence"],
                     epoch=epoch,
                     source_chunk_size=ot_attention_source_chunk_size,
+                    checkpoint_attention=checkpoint_ot_attention,
+                )
+                _record_forward_memory(
+                    memory_recorder,
+                    f"ot_attention_update_{source_section}_from_{target_section}_end",
+                    {
+                        "source_section": source_section,
+                        "target_section": target_section,
+                        "source_spots": int(graphsage_embeddings[source_section].shape[0]),
+                        "target_spots": int(graphsage_embeddings[target_section].shape[0]),
+                        "source_chunk_size": int(ot_attention_source_chunk_size or 0),
+                        "checkpoint_ot_attention": bool(checkpoint_ot_attention),
+                    },
                 )
 
             if resolved_order:
                 last_section = resolved_order[-1]
                 final_embeddings[last_section] = graphsage_embeddings[last_section]
+        _record_forward_memory(
+            memory_recorder,
+            "ot_attention_end",
+            {
+                "final_embedding_shapes": {
+                    section: list(embedding.shape)
+                    for section, embedding in final_embeddings.items()
+                },
+            },
+        )
 
         if self.config["decoder"]["enabled"] and self.config["reconstruction"]["enabled"]:
             for section in resolved_order:
@@ -787,6 +916,7 @@ class StageMultiModalModel(nn.Module):
                     lambda_by_modality=lambda_by_modality,
                     decoder_chunk_size=decoder_chunk_size,
                     return_reconstructions=keep_full_outputs,
+                    memory_recorder=memory_recorder,
                 )
                 reconstruction_loss = reconstruction_loss + section_rec_loss
                 if keep_full_outputs:
@@ -794,6 +924,14 @@ class StageMultiModalModel(nn.Module):
                     reconstructions[section] = section_recon
 
         total_loss = lambda_reconstruction * reconstruction_loss + lambda_contrast * crossview_loss
+        _record_forward_memory(
+            memory_recorder,
+            "end",
+            {
+                "decoder_enabled": bool(self.config["decoder"]["enabled"]),
+                "reconstruction_enabled": bool(self.config["reconstruction"]["enabled"]),
+            },
+        )
 
         if training_loss_only:
             return {

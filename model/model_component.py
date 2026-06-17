@@ -8,6 +8,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 
 def _build_activation(name: str) -> nn.Module:
@@ -289,80 +290,19 @@ class OTGuidedAttention(nn.Module):
         confidence: torch.Tensor,
         epoch: int | None = None,
         source_chunk_size: int | None = None,
+        checkpoint_attention: bool = False,
     ) -> torch.Tensor:
-        topk_idx = topk_idx.to(source_h.device)
-        topk_weight = topk_weight.to(device=source_h.device, dtype=source_h.dtype)
-        confidence = confidence.to(device=source_h.device, dtype=source_h.dtype)
-        target_h = target_h.to(source_h.device)
-
-        if source_chunk_size is not None and int(source_chunk_size) > 0:
-            chunk_size = int(source_chunk_size)
-            chunks: list[torch.Tensor] = []
-            for start in range(0, int(source_h.shape[0]), chunk_size):
-                end = min(start + chunk_size, int(source_h.shape[0]))
-                chunks.append(
-                    self._forward_chunk(
-                        source_h=source_h[start:end],
-                        target_h=target_h,
-                        topk_idx=topk_idx[start:end],
-                        topk_weight=topk_weight[start:end],
-                        confidence=confidence[start:end],
-                        epoch=epoch,
-                    )
-                )
-            return torch.cat(chunks, dim=0)
-
-        return self._forward_chunk(
+        update = self.compute_update_only(
             source_h=source_h,
             target_h=target_h,
             topk_idx=topk_idx,
             topk_weight=topk_weight,
             confidence=confidence,
             epoch=epoch,
+            source_chunk_size=source_chunk_size,
+            checkpoint_attention=checkpoint_attention,
         )
-
-    def _forward_chunk(
-        self,
-        source_h: torch.Tensor,
-        target_h: torch.Tensor,
-        topk_idx: torch.Tensor,
-        topk_weight: torch.Tensor,
-        confidence: torch.Tensor,
-        epoch: int | None = None,
-    ) -> torch.Tensor:
-        q = self.W_Q(source_h)
-        candidate_h = target_h[topk_idx]
-        k = self.W_K(candidate_h)
-        v = self.W_V(candidate_h)
-
-        beta = self._current_beta(epoch)
-        scores = (q.unsqueeze(1) * k).sum(dim=-1) / math.sqrt(self.d_attn)
-        log_prior = torch.log(topk_weight.float().clamp_min(self.delta))
-        scores = scores.float() + beta * log_prior
-        alpha = torch.softmax(scores, dim=1).to(v.dtype)
-        message = (alpha.unsqueeze(-1) * v).sum(dim=1)
-        message_bar = self.W_O(message)
-
-        # Gate follows the written OT-guided attention design:
-        # it is conditioned on raw attention message m, while W_O(m) is used for residual update.
-        gate_input = torch.cat(
-            [source_h, message, source_h - message, source_h * message],
-            dim=-1,
-        )
-        gate = self.gate_mlp(gate_input)
-        if self.use_confidence:
-            update_scale = confidence.unsqueeze(-1) * gate
-        else:
-            update_scale = gate
-        update = self.dropout(update_scale * message_bar)
-
-        if self.residual:
-            h_tilde = source_h + update
-        else:
-            h_tilde = update
-        if self.norm is not None:
-            h_tilde = self.norm(h_tilde)
-        return h_tilde
+        return self.apply_update(source_h, update)
 
     def compute_update_only(
         self,
@@ -373,6 +313,7 @@ class OTGuidedAttention(nn.Module):
         confidence: torch.Tensor,
         epoch: int | None = None,
         source_chunk_size: int | None = None,
+        checkpoint_attention: bool = False,
     ) -> torch.Tensor:
         """Return only the OT-guided directional update before residual add.
 
@@ -386,30 +327,83 @@ class OTGuidedAttention(nn.Module):
         confidence = confidence.to(device=source_h.device, dtype=source_h.dtype)
         target_h = target_h.to(source_h.device)
 
+        use_checkpoint = bool(
+            checkpoint_attention
+            and self.training
+            and torch.is_grad_enabled()
+        )
+
         if source_chunk_size is not None and int(source_chunk_size) > 0:
             chunk_size = int(source_chunk_size)
             chunks: list[torch.Tensor] = []
             for start in range(0, int(source_h.shape[0]), chunk_size):
                 end = min(start + chunk_size, int(source_h.shape[0]))
                 chunks.append(
-                    self._compute_update_chunk(
+                    self._compute_update_chunk_maybe_checkpointed(
                         source_h=source_h[start:end],
                         target_h=target_h,
                         topk_idx=topk_idx[start:end],
                         topk_weight=topk_weight[start:end],
                         confidence=confidence[start:end],
                         epoch=epoch,
+                        use_checkpoint=use_checkpoint,
                     )
                 )
             return torch.cat(chunks, dim=0)
 
-        return self._compute_update_chunk(
+        return self._compute_update_chunk_maybe_checkpointed(
             source_h=source_h,
             target_h=target_h,
             topk_idx=topk_idx,
             topk_weight=topk_weight,
             confidence=confidence,
             epoch=epoch,
+            use_checkpoint=use_checkpoint,
+        )
+
+    def _compute_update_chunk_maybe_checkpointed(
+        self,
+        source_h: torch.Tensor,
+        target_h: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weight: torch.Tensor,
+        confidence: torch.Tensor,
+        epoch: int | None = None,
+        use_checkpoint: bool = False,
+    ) -> torch.Tensor:
+        if not use_checkpoint:
+            return self._compute_update_chunk(
+                source_h=source_h,
+                target_h=target_h,
+                topk_idx=topk_idx,
+                topk_weight=topk_weight,
+                confidence=confidence,
+                epoch=epoch,
+            )
+
+        def chunk_fn(
+            source_h_chunk: torch.Tensor,
+            target_h_full: torch.Tensor,
+            topk_weight_chunk: torch.Tensor,
+            confidence_chunk: torch.Tensor,
+        ) -> torch.Tensor:
+            return self._compute_update_chunk(
+                source_h=source_h_chunk,
+                target_h=target_h_full,
+                topk_idx=topk_idx,
+                topk_weight=topk_weight_chunk,
+                confidence=confidence_chunk,
+                epoch=epoch,
+            )
+
+        return torch_checkpoint(
+            chunk_fn,
+            source_h,
+            target_h,
+            topk_weight,
+            confidence,
+            use_reentrant=False,
+            preserve_rng_state=True,
         )
 
     def _compute_update_chunk(
