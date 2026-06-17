@@ -82,6 +82,14 @@ def parse_args():
     parser.add_argument("--log_every", type=int, default=1)
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--ot_prior_mode", choices=["dense", "candidate_sparse"], default="dense")
+    parser.add_argument(
+        "--bidirectional_ot_attention",
+        action="store_true",
+        help=(
+            "Use synchronous bidirectional adjacent-section OT-guided attention. "
+            "Only changes candidate_sparse OT prior construction when explicitly enabled."
+        ),
+    )
     parser.add_argument("--candidate_backend", choices=["faiss_ivf", "faiss_flat", "blockwise"], default="faiss_ivf")
     parser.add_argument("--initial_modality_candidate_k", type=int, default=100)
     parser.add_argument("--candidate_k", type=int, default=200)
@@ -516,13 +524,14 @@ def save_ot_prior_topk(
         metadata = {
             "source_section": source_section,
             "target_section": target_section,
+            "direction_meaning": "source receives information from target",
             "topk": int(arrays["topk_idx"].shape[1]) if arrays["topk_idx"].ndim == 2 else None,
             "n_source": int(final_embeddings[source_section].shape[0]),
             "n_target": int(final_embeddings[target_section].shape[0]),
             "modalities_used": list(prior.get("modalities_used", [])),
             "has_dense_P": prior.get("P_dense") is not None,
             "run_mode": run_mode,
-            "note": "Saved sparse top-k UOT prior from model.ot_prior after final evaluation. Dense P was not saved.",
+            "note": "Saved sparse top-k UOT prior from model.ot_prior after final evaluation. X_to_Y means source X receives information from target Y. Dense P was not saved.",
         }
         metadata.update(prior.get("metadata", {}))
         with open(paths["metadata"], "w", encoding="utf-8") as handle:
@@ -561,6 +570,7 @@ def run_one_forward(
     decoder_chunk_size: int = 0,
     ot_attention_source_chunk_size: int = 0,
     cache_spatial_graphs: bool = False,
+    bidirectional_ot_attention: bool = False,
 ) -> dict[str, Any]:
     return model(
         feature_dict=feature_dict,
@@ -572,6 +582,7 @@ def run_one_forward(
         decoder_chunk_size=decoder_chunk_size,
         ot_attention_source_chunk_size=ot_attention_source_chunk_size,
         cache_spatial_graphs=cache_spatial_graphs,
+        bidirectional_ot_attention=bidirectional_ot_attention,
     )
 
 
@@ -612,6 +623,7 @@ def initialize_model_ot_prior(
             feature_dict,
             section_order=section_order,
             initial_modality_candidate_k=int(args.initial_modality_candidate_k),
+            bidirectional=bool(args.bidirectional_ot_attention),
             **kwargs,
         )
     raise ValueError(f"Unsupported ot_prior_mode: {args.ot_prior_mode}")
@@ -635,6 +647,7 @@ def update_model_ot_prior(
             embeddings,
             section_order=section_order,
             candidate_source=args.dynamic_candidate_source,
+            bidirectional=bool(args.bidirectional_ot_attention),
             **sparse_prior_kwargs(args),
         )
     raise ValueError(f"Unsupported ot_prior_mode: {args.ot_prior_mode}")
@@ -680,6 +693,7 @@ def train_small_crc_model(
                 decoder_chunk_size=int(args.decoder_chunk_size),
                 ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                 cache_spatial_graphs=bool(args.cache_spatial_graphs),
+                bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
             )
         forward_memory = (
             memory_monitor.record("epoch_forward_end", epoch=epoch)
@@ -787,6 +801,7 @@ def train_small_crc_model(
                     decoder_chunk_size=int(args.decoder_chunk_size),
                     ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
+                    bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                 )
                 if memory_monitor is not None:
                     memory_monitor.record("ot_update_forward_end", epoch=epoch)
@@ -817,6 +832,7 @@ def train_small_crc_model(
             decoder_chunk_size=int(args.decoder_chunk_size),
             ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
             cache_spatial_graphs=bool(args.cache_spatial_graphs),
+            bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
         )
         if memory_monitor is not None:
             memory_monitor.record("final_eval_end", epoch=epochs)
@@ -1037,6 +1053,11 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         initialize_model_ot_prior(model, feature_dict, section_order, args)
         memory_monitor.record("initial_ot_prior_end")
         initial_prior = model.ot_prior[("CRC_003", "CRC_006")]
+        if args.bidirectional_ot_attention and args.ot_prior_mode == "candidate_sparse":
+            expected_keys = {("CRC_003", "CRC_006"), ("CRC_006", "CRC_003")}
+            actual_keys = set((model.ot_prior or {}).keys())
+            if not expected_keys.issubset(actual_keys):
+                raise ValueError(f"Bidirectional OT prior is missing direction keys: {expected_keys - actual_keys}")
         initial_ot_modalities_used = list(initial_prior.get("modalities_used", []))
         if args.ot_prior_mode == "dense" and initial_ot_modalities_used != ["RNA", "Protein"]:
             raise ValueError(f"Unexpected initial OT modalities_used: {initial_ot_modalities_used}")
@@ -1068,6 +1089,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                     decoder_chunk_size=int(args.decoder_chunk_size),
                     ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
+                    bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                 )
                 memory_monitor.record("dry_run_forward_end", epoch=0)
 
@@ -1091,6 +1113,14 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             accepted_ot_modalities.append([f"{args.dynamic_candidate_source}_embedding"])
         if ot_modalities_used not in accepted_ot_modalities:
             raise ValueError(f"Unexpected OT modalities_used: {ot_modalities_used}")
+        if args.bidirectional_ot_attention and args.ot_prior_mode == "candidate_sparse":
+            reverse_prior = outputs["ot_prior"].get(("CRC_006", "CRC_003"))
+            if reverse_prior is None:
+                raise ValueError("Bidirectional OT prior is missing CRC_006<-CRC_003 direction.")
+            if int(prior["topk_idx"].max().item()) >= int(feature_dict["CRC_006"]["RNA"].shape[0]):
+                raise ValueError("CRC_003<-CRC_006 topk_idx contains out-of-range target indices.")
+            if int(reverse_prior["topk_idx"].max().item()) >= int(feature_dict["CRC_003"]["RNA"].shape[0]):
+                raise ValueError("CRC_006<-CRC_003 topk_idx contains out-of-range target indices.")
         if not total_loss_finite:
             raise ValueError("total_loss is not finite.")
 
@@ -1151,6 +1181,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "ot_updates": ot_updates,
             "uot_max_iter": int(args.uot_max_iter),
             "ot_prior_mode": args.ot_prior_mode,
+            "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
             "candidate_backend": args.candidate_backend,
             "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
             "candidate_k": int(args.candidate_k),

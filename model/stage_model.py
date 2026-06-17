@@ -24,7 +24,9 @@ from .model_component import (
     WeightedResidualGraphSAGE,
 )
 from .sparse_uot import (
+    compute_initial_bidirectional_candidate_sparse_uot_prior,
     compute_initial_candidate_sparse_uot_prior,
+    update_bidirectional_candidate_sparse_uot_prior_from_embeddings,
     update_candidate_sparse_uot_prior_from_embeddings,
 )
 from .utils import compute_spatial_knn_graph_with_weights
@@ -454,6 +456,7 @@ class StageMultiModalModel(nn.Module):
         tau_b: float = 1.0,
         max_iter: int = 100,
         stabilizer: float = 1e-8,
+        bidirectional: bool = False,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Initialize adjacent-stage candidate-sparse UOT priors."""
 
@@ -472,7 +475,12 @@ class StageMultiModalModel(nn.Module):
                     f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
                 )
         device = self._select_device(feature_dict)
-        self.ot_prior = compute_initial_candidate_sparse_uot_prior(
+        init_fn = (
+            compute_initial_bidirectional_candidate_sparse_uot_prior
+            if bidirectional
+            else compute_initial_candidate_sparse_uot_prior
+        )
+        self.ot_prior = init_fn(
             feature_dict=feature_dict,
             section_order=resolved_order,
             modalities=expected_modality_order or self.config["model"]["modalities_supported"],
@@ -544,6 +552,7 @@ class StageMultiModalModel(nn.Module):
         max_iter: int = 100,
         stabilizer: float = 1e-8,
         candidate_source: str = "fused",
+        bidirectional: bool = False,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Refresh candidate-sparse UOT priors from fused/final embeddings."""
 
@@ -551,7 +560,12 @@ class StageMultiModalModel(nn.Module):
             self.ot_prior = {}
             return self.ot_prior
         device = self._select_device({section: {"embedding": value} for section, value in embedding_dict.items()})
-        self.ot_prior = update_candidate_sparse_uot_prior_from_embeddings(
+        update_fn = (
+            update_bidirectional_candidate_sparse_uot_prior_from_embeddings
+            if bidirectional
+            else update_candidate_sparse_uot_prior_from_embeddings
+        )
+        self.ot_prior = update_fn(
             embedding_dict=embedding_dict,
             section_order=section_order,
             candidate_k=candidate_k,
@@ -585,6 +599,7 @@ class StageMultiModalModel(nn.Module):
         decoder_chunk_size: int | None = None,
         ot_attention_source_chunk_size: int | None = None,
         cache_spatial_graphs: bool = False,
+        bidirectional_ot_attention: bool = False,
     ) -> dict[str, Any]:
         if self._looks_like_section_order(processed_data_dict):
             if section_order is None:
@@ -712,26 +727,56 @@ class StageMultiModalModel(nn.Module):
         elif self.ot_prior is None:
             self.ot_prior = {}
 
-        for source_section, target_section in zip(resolved_order[:-1], resolved_order[1:]):
-            prior = (self.ot_prior or {}).get((source_section, target_section))
-            if prior is None or not self.config["ot_attention"]["enabled"]:
-                final_embeddings[source_section] = graphsage_embeddings[source_section]
-                if prior is None:
-                    messages.append(f"No OT prior found for {source_section}->{target_section}; used GraphSAGE output.")
-                continue
-            final_embeddings[source_section] = self.ot_attention(
-                source_h=graphsage_embeddings[source_section],
-                target_h=graphsage_embeddings[target_section],
-                topk_idx=prior["topk_idx"],
-                topk_weight=prior["topk_weight"],
-                confidence=prior["confidence"],
-                epoch=epoch,
-                source_chunk_size=ot_attention_source_chunk_size,
-            )
+        if bidirectional_ot_attention and self.config["ot_attention"]["enabled"]:
+            update_lists: dict[str, list[torch.Tensor]] = {section: [] for section in resolved_order}
+            for (source_section, target_section), prior in (self.ot_prior or {}).items():
+                if source_section not in update_lists or target_section not in graphsage_embeddings:
+                    continue
+                update = self.ot_attention.compute_update_only(
+                    source_h=graphsage_embeddings[source_section],
+                    target_h=graphsage_embeddings[target_section],
+                    topk_idx=prior["topk_idx"],
+                    topk_weight=prior["topk_weight"],
+                    confidence=prior["confidence"],
+                    epoch=epoch,
+                    source_chunk_size=ot_attention_source_chunk_size,
+                )
+                update_lists[source_section].append(update)
 
-        if resolved_order:
-            last_section = resolved_order[-1]
-            final_embeddings[last_section] = graphsage_embeddings[last_section]
+            for section in resolved_order:
+                if update_lists[section]:
+                    update_sum = update_lists[section][0]
+                    for update in update_lists[section][1:]:
+                        update_sum = update_sum + update
+                    mean_update = update_sum / float(len(update_lists[section]))
+                    final_embeddings[section] = self.ot_attention.apply_update(
+                        graphsage_embeddings[section],
+                        mean_update,
+                    )
+                else:
+                    final_embeddings[section] = graphsage_embeddings[section]
+                    messages.append(f"No directional OT update found for {section}; used GraphSAGE output.")
+        else:
+            for source_section, target_section in zip(resolved_order[:-1], resolved_order[1:]):
+                prior = (self.ot_prior or {}).get((source_section, target_section))
+                if prior is None or not self.config["ot_attention"]["enabled"]:
+                    final_embeddings[source_section] = graphsage_embeddings[source_section]
+                    if prior is None:
+                        messages.append(f"No OT prior found for {source_section}->{target_section}; used GraphSAGE output.")
+                    continue
+                final_embeddings[source_section] = self.ot_attention(
+                    source_h=graphsage_embeddings[source_section],
+                    target_h=graphsage_embeddings[target_section],
+                    topk_idx=prior["topk_idx"],
+                    topk_weight=prior["topk_weight"],
+                    confidence=prior["confidence"],
+                    epoch=epoch,
+                    source_chunk_size=ot_attention_source_chunk_size,
+                )
+
+            if resolved_order:
+                last_section = resolved_order[-1]
+                final_embeddings[last_section] = graphsage_embeddings[last_section]
 
         if self.config["decoder"]["enabled"] and self.config["reconstruction"]["enabled"]:
             for section in resolved_order:

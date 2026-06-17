@@ -364,6 +364,99 @@ class OTGuidedAttention(nn.Module):
             h_tilde = self.norm(h_tilde)
         return h_tilde
 
+    def compute_update_only(
+        self,
+        source_h: torch.Tensor,
+        target_h: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weight: torch.Tensor,
+        confidence: torch.Tensor,
+        epoch: int | None = None,
+        source_chunk_size: int | None = None,
+    ) -> torch.Tensor:
+        """Return only the OT-guided directional update before residual add.
+
+        This is used by synchronous bidirectional attention, where multiple
+        directional updates must be computed from the same base embeddings and
+        averaged before one residual update is applied.
+        """
+
+        topk_idx = topk_idx.to(source_h.device)
+        topk_weight = topk_weight.to(device=source_h.device, dtype=source_h.dtype)
+        confidence = confidence.to(device=source_h.device, dtype=source_h.dtype)
+        target_h = target_h.to(source_h.device)
+
+        if source_chunk_size is not None and int(source_chunk_size) > 0:
+            chunk_size = int(source_chunk_size)
+            chunks: list[torch.Tensor] = []
+            for start in range(0, int(source_h.shape[0]), chunk_size):
+                end = min(start + chunk_size, int(source_h.shape[0]))
+                chunks.append(
+                    self._compute_update_chunk(
+                        source_h=source_h[start:end],
+                        target_h=target_h,
+                        topk_idx=topk_idx[start:end],
+                        topk_weight=topk_weight[start:end],
+                        confidence=confidence[start:end],
+                        epoch=epoch,
+                    )
+                )
+            return torch.cat(chunks, dim=0)
+
+        return self._compute_update_chunk(
+            source_h=source_h,
+            target_h=target_h,
+            topk_idx=topk_idx,
+            topk_weight=topk_weight,
+            confidence=confidence,
+            epoch=epoch,
+        )
+
+    def _compute_update_chunk(
+        self,
+        source_h: torch.Tensor,
+        target_h: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weight: torch.Tensor,
+        confidence: torch.Tensor,
+        epoch: int | None = None,
+    ) -> torch.Tensor:
+        q = self.W_Q(source_h)
+        candidate_h = target_h[topk_idx]
+        k = self.W_K(candidate_h)
+        v = self.W_V(candidate_h)
+
+        beta = self._current_beta(epoch)
+        scores = (q.unsqueeze(1) * k).sum(dim=-1) / math.sqrt(self.d_attn)
+        log_prior = torch.log(topk_weight.float().clamp_min(self.delta))
+        scores = scores.float() + beta * log_prior
+        alpha = torch.softmax(scores, dim=1).to(v.dtype)
+        message = (alpha.unsqueeze(-1) * v).sum(dim=1)
+        message_bar = self.W_O(message)
+
+        gate_input = torch.cat(
+            [source_h, message_bar, source_h - message_bar, source_h * message_bar],
+            dim=-1,
+        )
+        gate = self.gate_mlp(gate_input)
+        if self.use_confidence:
+            update_scale = confidence.unsqueeze(-1) * gate
+        else:
+            update_scale = gate
+        return update_scale * message_bar
+
+    def apply_update(self, source_h: torch.Tensor, update: torch.Tensor) -> torch.Tensor:
+        """Apply the residual/dropout/norm step to a precomputed update."""
+
+        update = self.dropout(update)
+        if self.residual:
+            h_tilde = source_h + update
+        else:
+            h_tilde = update
+        if self.norm is not None:
+            h_tilde = self.norm(h_tilde)
+        return h_tilde
+
 
 class ModalityDecoder(nn.Module):
     """Decode final 128-d embeddings back to preprocessed modality features."""
