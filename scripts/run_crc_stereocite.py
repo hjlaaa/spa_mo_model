@@ -113,6 +113,15 @@ def parse_args():
     parser.add_argument("--uot_tau_b", type=float, default=1.0)
     parser.add_argument("--uot_stabilizer", type=float, default=1e-8)
     parser.add_argument(
+        "--spatial_knn_k",
+        type=int,
+        default=5,
+        help=(
+            "Number of non-self spatial neighbors for the weighted KNN graph. "
+            "The graph also includes self-loops."
+        ),
+    )
+    parser.add_argument(
         "--graphsage_edge_batch_size",
         type=int,
         default=200000,
@@ -1136,6 +1145,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         model_config["uot"]["check_every"] = 10
         model_config["uot"]["tol"] = 1e-5
         model_config["uot"]["update_interval"] = int(args.update_interval)
+        model_config["graph"]["knn_neighbors_spatial"] = int(args.spatial_knn_k)
         model_config["graphsage"]["edge_batch_size"] = int(args.graphsage_edge_batch_size)
         memory_monitor.reset_peak()
         memory_monitor.record("model_init_start")
@@ -1307,6 +1317,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "uot_tau_a": float(args.uot_tau_a),
             "uot_tau_b": float(args.uot_tau_b),
             "uot_stabilizer": float(args.uot_stabilizer),
+            "spatial_knn_k": int(args.spatial_knn_k),
             "graphsage_edge_batch_size": int(args.graphsage_edge_batch_size),
             "training_loss_only": bool(args.training_loss_only),
             "decoder_chunk_size": int(args.decoder_chunk_size),
