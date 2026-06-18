@@ -155,6 +155,22 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--checkpoint_decoder_chunks",
+        action="store_true",
+        help=(
+            "Activation-checkpoint each chunked decoder reconstruction loss during training. "
+            "Requires --decoder_chunk_size > 0 and is most useful with --training_loss_only."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint_graph_encoder",
+        action="store_true",
+        help=(
+            "Activation-checkpoint the graph encoder forward during training. "
+            "The current graph encoder implementation is WeightedResidualGraphSAGE."
+        ),
+    )
+    parser.add_argument(
         "--amp_dtype",
         choices=["none", "bf16", "fp16"],
         default="none",
@@ -612,6 +628,8 @@ def run_one_forward(
     bidirectional_ot_attention: bool = False,
     checkpoint_ot_attention: bool = False,
     checkpoint_encoder_fusion: bool = False,
+    checkpoint_decoder_chunks: bool = False,
+    checkpoint_graph_encoder: bool = False,
     memory_recorder=None,
 ) -> dict[str, Any]:
     return model(
@@ -627,6 +645,8 @@ def run_one_forward(
         bidirectional_ot_attention=bidirectional_ot_attention,
         checkpoint_ot_attention=checkpoint_ot_attention,
         checkpoint_encoder_fusion=checkpoint_encoder_fusion,
+        checkpoint_decoder_chunks=checkpoint_decoder_chunks,
+        checkpoint_graph_encoder=checkpoint_graph_encoder,
         memory_recorder=memory_recorder,
     )
 
@@ -741,6 +761,8 @@ def train_small_crc_model(
                 bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                 checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
                 checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
+                checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
+                checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
                 memory_recorder=make_forward_memory_recorder(
                     memory_monitor,
                     bool(args.log_cuda_memory_detail),
@@ -857,6 +879,8 @@ def train_small_crc_model(
                     bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                     checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
                     checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
+                    checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
+                    checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
                     memory_recorder=make_forward_memory_recorder(
                         memory_monitor,
                         bool(args.log_cuda_memory_detail),
@@ -896,6 +920,8 @@ def train_small_crc_model(
             bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
             checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
             checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
+            checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
+            checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
             memory_recorder=make_forward_memory_recorder(
                 memory_monitor,
                 bool(args.log_cuda_memory_detail),
@@ -1163,6 +1189,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                     bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                     checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
                     checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
+                    checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
+                    checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
                     memory_recorder=make_forward_memory_recorder(
                         memory_monitor,
                         bool(args.log_cuda_memory_detail),
@@ -1285,6 +1313,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "ot_attention_source_chunk_size": int(args.ot_attention_source_chunk_size),
             "checkpoint_ot_attention": bool(args.checkpoint_ot_attention),
             "checkpoint_encoder_fusion": bool(args.checkpoint_encoder_fusion),
+            "checkpoint_decoder_chunks": bool(args.checkpoint_decoder_chunks),
+            "checkpoint_graph_encoder": bool(args.checkpoint_graph_encoder),
             "amp_dtype": args.amp_dtype,
             "amp_enabled": bool(amp_enabled(args)),
             "cache_spatial_graphs": bool(args.cache_spatial_graphs),

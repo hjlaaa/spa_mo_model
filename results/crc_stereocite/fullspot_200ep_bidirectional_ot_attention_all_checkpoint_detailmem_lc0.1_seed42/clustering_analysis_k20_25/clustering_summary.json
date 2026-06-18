@@ -1,0 +1,146 @@
+{
+  "input_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42",
+  "output_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25",
+  "seed": 42,
+  "n_clusters": [
+    20,
+    25
+  ],
+  "kmeans_method": "minibatch",
+  "batch_size": 8192,
+  "n_init": 10,
+  "max_iter": 300,
+  "plot_max_points": 0,
+  "point_size": 0.6,
+  "dpi": 220,
+  "sections": [
+    "CRC_003",
+    "CRC_006"
+  ],
+  "embedding_shapes": {
+    "CRC_003": [
+      166279,
+      128
+    ],
+    "CRC_006": [
+      446095,
+      128
+    ]
+  },
+  "spatial_shapes": {
+    "CRC_003": [
+      166279,
+      2
+    ],
+    "CRC_006": [
+      446095,
+      2
+    ]
+  },
+  "selected_spot_index_shapes": {
+    "CRC_003": [
+      166279
+    ],
+    "CRC_006": [
+      446095
+    ]
+  },
+  "source_paths": {
+    "run_summary": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/run_summary.json",
+    "loss_history": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/loss_history.json",
+    "embedding_CRC_003": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/final_embeddings_CRC_003.npy",
+    "spatial_CRC_003": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/spatial_CRC_003.npy",
+    "spot_index_CRC_003": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/selected_spot_indices_CRC_003.npy",
+    "embedding_CRC_006": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/final_embeddings_CRC_006.npy",
+    "spatial_CRC_006": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/spatial_CRC_006.npy",
+    "spot_index_CRC_006": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/selected_spot_indices_CRC_006.npy"
+  },
+  "run_summary_mode": "train",
+  "loss_history_epochs": 200,
+  "training_curve_files": [
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/total_loss.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/reconstruction_loss.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/weighted_crossview_loss.png"
+  ],
+  "results": [
+    {
+      "mode": "joint",
+      "n_clusters": 20,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_003_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_003_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_006_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_006_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 20,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_003_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_003_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_006_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_006_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 25,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_003_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_003_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_006_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_006_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 25,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_003_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_003_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_006_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_006_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_cluster_counts.csv"
+      ]
+    }
+  ],
+  "output_files": [
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_003_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_003_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_006_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_CRC_006_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k20/joint_k20_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_003_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_003_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_006_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_CRC_006_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k20/independent_k20_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_003_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_003_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_006_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_CRC_006_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/joint_k25/joint_k25_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_003_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_003_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_006_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_CRC_006_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/independent_k25/independent_k25_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/total_loss.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/reconstruction_loss.png",
+    "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/training_curves/weighted_crossview_loss.png"
+  ]
+}

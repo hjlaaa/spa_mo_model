@@ -68,6 +68,53 @@ def _checkpoint_module_forward(module: nn.Module, *inputs: torch.Tensor) -> torc
     )
 
 
+def _checkpoint_decoder_loss_chunk(
+    decoder: nn.Module,
+    embedding_chunk: torch.Tensor,
+    target_chunk: torch.Tensor,
+) -> torch.Tensor:
+    def run_decoder_loss(
+        emb_chunk: torch.Tensor,
+        tgt_chunk: torch.Tensor,
+    ) -> torch.Tensor:
+        recon_chunk = decoder(emb_chunk)
+        if recon_chunk.shape != tgt_chunk.shape:
+            raise ValueError(
+                "Reconstruction chunk shape mismatch: "
+                f"recon={tuple(recon_chunk.shape)}, target={tuple(tgt_chunk.shape)}."
+            )
+        return F.mse_loss(
+            recon_chunk.float(),
+            tgt_chunk.float(),
+            reduction="sum",
+        )
+
+    return torch_checkpoint(
+        run_decoder_loss,
+        embedding_chunk,
+        target_chunk,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    )
+
+
+def _checkpoint_graph_encoder_forward(
+    graph_encoder: nn.Module,
+    x: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_weight: torch.Tensor,
+) -> torch.Tensor:
+    def run_graph_encoder(x_in: torch.Tensor) -> torch.Tensor:
+        return graph_encoder(x_in, edge_index, edge_weight)
+
+    return torch_checkpoint(
+        run_graph_encoder,
+        x,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    )
+
+
 def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
     """Return True when the cached UOT prior should be refreshed.
 
@@ -359,6 +406,7 @@ class StageMultiModalModel(nn.Module):
         target_features: Mapping[str, torch.Tensor],
         lambda_by_modality: Mapping[str, float] | None,
         decoder_chunk_size: int | None = None,
+        checkpoint_decoder_chunks: bool = False,
         return_reconstructions: bool = True,
         memory_recorder: ForwardMemoryRecorder | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
@@ -368,6 +416,13 @@ class StageMultiModalModel(nn.Module):
 
         weights = lambda_by_modality or {}
         chunk_size = int(decoder_chunk_size or 0)
+        use_decoder_chunk_checkpoint = bool(
+            checkpoint_decoder_chunks
+            and self.training
+            and torch.is_grad_enabled()
+            and chunk_size > 0
+            and not return_reconstructions
+        )
         total_loss = torch.zeros((), device=final_embedding.device, dtype=torch.float32)
         detail: dict[str, torch.Tensor] = {}
         reconstructions: dict[str, torch.Tensor] = {}
@@ -393,24 +448,32 @@ class StageMultiModalModel(nn.Module):
                 recon_chunks: list[torch.Tensor] = []
                 for start in range(0, int(final_embedding.shape[0]), chunk_size):
                     end = min(start + chunk_size, int(final_embedding.shape[0]))
-                    recon_chunk = self.decoders[modality](final_embedding[start:end])
+                    embedding_chunk = final_embedding[start:end]
                     target_chunk = target[start:end]
-                    if recon_chunk.shape != target_chunk.shape:
-                        raise ValueError(
-                            f"Reconstruction shape mismatch for {section}/{modality}: "
-                            f"recon={tuple(recon_chunk.shape)}, target={tuple(target_chunk.shape)}."
+                    if use_decoder_chunk_checkpoint:
+                        sqerr = sqerr + _checkpoint_decoder_loss_chunk(
+                            self.decoders[modality],
+                            embedding_chunk,
+                            target_chunk,
                         )
-                    sqerr = sqerr + F.mse_loss(
-                        recon_chunk.float(),
-                        target_chunk.float(),
-                        reduction="sum",
-                    )
+                    else:
+                        recon_chunk = self.decoders[modality](embedding_chunk)
+                        if recon_chunk.shape != target_chunk.shape:
+                            raise ValueError(
+                                f"Reconstruction shape mismatch for {section}/{modality}: "
+                                f"recon={tuple(recon_chunk.shape)}, target={tuple(target_chunk.shape)}."
+                            )
+                        sqerr = sqerr + F.mse_loss(
+                            recon_chunk.float(),
+                            target_chunk.float(),
+                            reduction="sum",
+                        )
+                        if return_reconstructions:
+                            if torch.is_grad_enabled():
+                                recon_chunks.append(recon_chunk)
+                            else:
+                                recon_chunks.append(recon_chunk.detach().cpu())
                     total_numel += int(target_chunk.numel())
-                    if return_reconstructions:
-                        if torch.is_grad_enabled():
-                            recon_chunks.append(recon_chunk)
-                        else:
-                            recon_chunks.append(recon_chunk.detach().cpu())
                 if total_numel <= 0:
                     raise ValueError(f"Empty reconstruction target for {section}/{modality}.")
                 loss = sqerr / float(total_numel)
@@ -428,6 +491,8 @@ class StageMultiModalModel(nn.Module):
                     "n_spots": int(final_embedding.shape[0]),
                     "output_dim": int(target.shape[1]),
                     "decoder_chunk_size": chunk_size,
+                    "checkpoint_decoder_chunks": bool(checkpoint_decoder_chunks),
+                    "decoder_chunk_checkpoint_active": bool(use_decoder_chunk_checkpoint),
                     "return_reconstructions": bool(return_reconstructions),
                 },
             )
@@ -640,6 +705,8 @@ class StageMultiModalModel(nn.Module):
         bidirectional_ot_attention: bool = False,
         checkpoint_ot_attention: bool = False,
         checkpoint_encoder_fusion: bool = False,
+        checkpoint_decoder_chunks: bool = False,
+        checkpoint_graph_encoder: bool = False,
         memory_recorder: ForwardMemoryRecorder | None = None,
     ) -> dict[str, Any]:
         if self._looks_like_section_order(processed_data_dict):
@@ -670,6 +737,11 @@ class StageMultiModalModel(nn.Module):
             and self.training
             and torch.is_grad_enabled()
         )
+        use_graph_encoder_checkpoint = bool(
+            checkpoint_graph_encoder
+            and self.training
+            and torch.is_grad_enabled()
+        )
 
         fused_embeddings: dict[str, torch.Tensor] = {}
         graphsage_embeddings: dict[str, torch.Tensor] = {}
@@ -696,6 +768,8 @@ class StageMultiModalModel(nn.Module):
                 "bidirectional_ot_attention": bool(bidirectional_ot_attention),
                 "checkpoint_ot_attention": bool(checkpoint_ot_attention),
                 "checkpoint_encoder_fusion": bool(checkpoint_encoder_fusion),
+                "checkpoint_decoder_chunks": bool(checkpoint_decoder_chunks),
+                "checkpoint_graph_encoder": bool(checkpoint_graph_encoder),
             },
         )
 
@@ -846,7 +920,15 @@ class StageMultiModalModel(nn.Module):
                 fused_embeddings[section] = fused
 
             if graph_sage_cfg["enabled"]:
-                graphsage_embeddings[section] = self.graphsage(fused, edge_index, edge_weight)
+                if use_graph_encoder_checkpoint:
+                    graphsage_embeddings[section] = _checkpoint_graph_encoder_forward(
+                        self.graphsage,
+                        fused,
+                        edge_index,
+                        edge_weight,
+                    )
+                else:
+                    graphsage_embeddings[section] = self.graphsage(fused, edge_index, edge_weight)
             else:
                 graphsage_embeddings[section] = fused
             _record_forward_memory(
@@ -856,6 +938,10 @@ class StageMultiModalModel(nn.Module):
                     "section": section,
                     "graphsage_enabled": bool(graph_sage_cfg["enabled"]),
                     "graphsage_shape": list(graphsage_embeddings[section].shape),
+                    "checkpoint_graph_encoder": bool(checkpoint_graph_encoder),
+                    "graph_encoder_checkpoint_active": bool(
+                        use_graph_encoder_checkpoint and graph_sage_cfg["enabled"]
+                    ),
                 },
             )
 
@@ -966,6 +1052,7 @@ class StageMultiModalModel(nn.Module):
                     target_features=target_feature_dict[section],
                     lambda_by_modality=lambda_by_modality,
                     decoder_chunk_size=decoder_chunk_size,
+                    checkpoint_decoder_chunks=checkpoint_decoder_chunks,
                     return_reconstructions=keep_full_outputs,
                     memory_recorder=memory_recorder,
                 )
