@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Sequence
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from .configure import get_default_model_config
 from .linkage_construction import (
@@ -53,6 +54,18 @@ def _record_forward_memory(
 ) -> None:
     if recorder is not None:
         recorder(stage, extra)
+
+
+def _checkpoint_module_forward(module: nn.Module, *inputs: torch.Tensor) -> torch.Tensor:
+    def run_module(*args: torch.Tensor) -> torch.Tensor:
+        return module(*args)
+
+    return torch_checkpoint(
+        run_module,
+        *inputs,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    )
 
 
 def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
@@ -626,6 +639,7 @@ class StageMultiModalModel(nn.Module):
         cache_spatial_graphs: bool = False,
         bidirectional_ot_attention: bool = False,
         checkpoint_ot_attention: bool = False,
+        checkpoint_encoder_fusion: bool = False,
         memory_recorder: ForwardMemoryRecorder | None = None,
     ) -> dict[str, Any]:
         if self._looks_like_section_order(processed_data_dict):
@@ -651,6 +665,11 @@ class StageMultiModalModel(nn.Module):
         lambda_reconstruction = float(self.config["loss"]["lambda_reconstruction"])
         lambda_by_modality = self.config["reconstruction"]["lambda_by_modality"]
         keep_full_outputs = bool(return_full_outputs) and not bool(training_loss_only)
+        use_encoder_fusion_checkpoint = bool(
+            checkpoint_encoder_fusion
+            and self.training
+            and torch.is_grad_enabled()
+        )
 
         fused_embeddings: dict[str, torch.Tensor] = {}
         graphsage_embeddings: dict[str, torch.Tensor] = {}
@@ -676,6 +695,7 @@ class StageMultiModalModel(nn.Module):
                 "return_full_outputs": bool(return_full_outputs),
                 "bidirectional_ot_attention": bool(bidirectional_ot_attention),
                 "checkpoint_ot_attention": bool(checkpoint_ot_attention),
+                "checkpoint_encoder_fusion": bool(checkpoint_encoder_fusion),
             },
         )
 
@@ -759,7 +779,14 @@ class StageMultiModalModel(nn.Module):
             for modality in modality_order:
                 if modality not in self.encoders:
                     raise KeyError(f"No encoder initialized for modality {modality}.")
-                section_latents[modality] = self.encoders[modality](section_features[modality])
+                encoder = self.encoders[modality]
+                if use_encoder_fusion_checkpoint:
+                    section_latents[modality] = _checkpoint_module_forward(
+                        encoder,
+                        section_features[modality],
+                    )
+                else:
+                    section_latents[modality] = encoder(section_features[modality])
                 _record_forward_memory(
                     memory_recorder,
                     f"section_{section}_encoder_{modality}_end",
@@ -767,6 +794,7 @@ class StageMultiModalModel(nn.Module):
                         "section": section,
                         "modality": modality,
                         "latent_shape": list(section_latents[modality].shape),
+                        "checkpoint_encoder_fusion": bool(checkpoint_encoder_fusion),
                     },
                 )
 
@@ -785,11 +813,34 @@ class StageMultiModalModel(nn.Module):
                 latent_dict[section] = section_latents
             target_feature_dict[section] = section_features
 
-            fused = self.fusion_modules[combo_key](section_latents)
+            fusion_module = self.fusion_modules[combo_key]
+            if use_encoder_fusion_checkpoint:
+                fusion_latents = tuple(section_latents[modality] for modality in modality_order)
+
+                def run_fusion(*latents: torch.Tensor) -> torch.Tensor:
+                    return fusion_module(
+                        {
+                            modality: latent
+                            for modality, latent in zip(modality_order, latents)
+                        }
+                    )
+
+                fused = torch_checkpoint(
+                    run_fusion,
+                    *fusion_latents,
+                    use_reentrant=False,
+                    preserve_rng_state=True,
+                )
+            else:
+                fused = fusion_module(section_latents)
             _record_forward_memory(
                 memory_recorder,
                 f"section_{section}_fusion_end",
-                {"section": section, "fused_shape": list(fused.shape)},
+                {
+                    "section": section,
+                    "fused_shape": list(fused.shape),
+                    "checkpoint_encoder_fusion": bool(checkpoint_encoder_fusion),
+                },
             )
             if keep_full_outputs:
                 fused_embeddings[section] = fused

@@ -147,6 +147,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--checkpoint_encoder_fusion",
+        action="store_true",
+        help=(
+            "Activation-checkpoint modality-specific encoder and FusionMLP forwards during training. "
+            "This trades extra backward recomputation time for lower activation memory."
+        ),
+    )
+    parser.add_argument(
         "--amp_dtype",
         choices=["none", "bf16", "fp16"],
         default="none",
@@ -603,6 +611,7 @@ def run_one_forward(
     cache_spatial_graphs: bool = False,
     bidirectional_ot_attention: bool = False,
     checkpoint_ot_attention: bool = False,
+    checkpoint_encoder_fusion: bool = False,
     memory_recorder=None,
 ) -> dict[str, Any]:
     return model(
@@ -617,6 +626,7 @@ def run_one_forward(
         cache_spatial_graphs=cache_spatial_graphs,
         bidirectional_ot_attention=bidirectional_ot_attention,
         checkpoint_ot_attention=checkpoint_ot_attention,
+        checkpoint_encoder_fusion=checkpoint_encoder_fusion,
         memory_recorder=memory_recorder,
     )
 
@@ -730,6 +740,7 @@ def train_small_crc_model(
                 cache_spatial_graphs=bool(args.cache_spatial_graphs),
                 bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                 checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+                checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
                 memory_recorder=make_forward_memory_recorder(
                     memory_monitor,
                     bool(args.log_cuda_memory_detail),
@@ -845,6 +856,7 @@ def train_small_crc_model(
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
                     bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                     checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+                    checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
                     memory_recorder=make_forward_memory_recorder(
                         memory_monitor,
                         bool(args.log_cuda_memory_detail),
@@ -883,6 +895,7 @@ def train_small_crc_model(
             cache_spatial_graphs=bool(args.cache_spatial_graphs),
             bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
             checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+            checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
             memory_recorder=make_forward_memory_recorder(
                 memory_monitor,
                 bool(args.log_cuda_memory_detail),
@@ -1149,6 +1162,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
                     bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                     checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
+                    checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
                     memory_recorder=make_forward_memory_recorder(
                         memory_monitor,
                         bool(args.log_cuda_memory_detail),
@@ -1270,6 +1284,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "decoder_chunk_size": int(args.decoder_chunk_size),
             "ot_attention_source_chunk_size": int(args.ot_attention_source_chunk_size),
             "checkpoint_ot_attention": bool(args.checkpoint_ot_attention),
+            "checkpoint_encoder_fusion": bool(args.checkpoint_encoder_fusion),
             "amp_dtype": args.amp_dtype,
             "amp_enabled": bool(amp_enabled(args)),
             "cache_spatial_graphs": bool(args.cache_spatial_graphs),
