@@ -23,6 +23,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from batch_correction_metrics import compute_batch_correction_metrics
+
 
 SECTION_ORDER = ["CRC_003", "CRC_006"]
 
@@ -54,6 +56,25 @@ def parse_args():
         default=0,
         help="Optional max points per section for PNG plotting only. 0 plots all points.",
     )
+    parser.add_argument(
+        "--batch_metrics_max_samples",
+        "--batch_metric_max_samples",
+        "--batch_metric_sample_size",
+        type=int,
+        default=50000,
+        help="Maximum spots used for batch metrics; <=0 uses all valid spots.",
+    )
+    parser.add_argument("--batch_asw_sample_size", type=int, default=10000)
+    parser.add_argument(
+        "--batch_lisi_neighbors",
+        "--batch_metric_neighbors",
+        type=int,
+        default=90,
+    )
+    parser.add_argument("--kbet_neighbors", type=int, default=50)
+    parser.add_argument("--batch_metric_seed", type=int, default=0)
+    parser.add_argument("--kbet_alpha", type=float, default=0.05)
+    parser.add_argument("--pcr_components", "--pcr_n_components", type=int, default=50)
     return parser.parse_args()
 
 
@@ -232,6 +253,37 @@ def fit_kmeans(embedding: np.ndarray, n_clusters: int, seed: int, args) -> np.nd
     return model.fit_predict(embedding).astype(int)
 
 
+def save_batch_correction_metrics(
+    output_dir: Path,
+    embeddings: dict[str, np.ndarray],
+    args,
+) -> tuple[dict[str, Any], str]:
+    stacked = np.vstack([embeddings[section] for section in SECTION_ORDER])
+    batch_labels = np.concatenate(
+        [
+            np.full(embeddings[section].shape[0], section, dtype=object)
+            for section in SECTION_ORDER
+        ]
+    )
+    metrics = compute_batch_correction_metrics(
+        stacked,
+        batch_labels,
+        dataset="CRC Stereo-CITE-seq",
+        method="spa_mo_model",
+        batch_label_name="section",
+        max_samples=int(args.batch_metrics_max_samples),
+        asw_sample_size=int(args.batch_asw_sample_size),
+        lisi_neighbors=int(args.batch_lisi_neighbors),
+        kbet_neighbors=int(args.kbet_neighbors),
+        seed=int(args.batch_metric_seed),
+        kbet_alpha=float(args.kbet_alpha),
+        pcr_components=int(args.pcr_components),
+    )
+    path = output_dir / "batch_correction_metrics.csv"
+    pd.DataFrame([metrics]).to_csv(path, index=False)
+    return metrics, str(path)
+
+
 def run_joint_kmeans(
     embeddings: dict[str, np.ndarray],
     spatial: dict[str, np.ndarray],
@@ -363,6 +415,7 @@ def main() -> None:
 
     n_clusters_list = parse_cluster_counts(args.n_clusters)
     embeddings, spatial, spot_indices, run_summary, loss_history, source_paths = load_inputs(input_dir)
+    batch_metrics, batch_metrics_path = save_batch_correction_metrics(output_dir, embeddings, args)
 
     results = []
     training_curve_files = plot_loss_history(output_dir, loss_history)
@@ -420,9 +473,11 @@ def main() -> None:
         "source_paths": source_paths,
         "run_summary_mode": run_summary.get("mode"),
         "loss_history_epochs": len(loss_history) if isinstance(loss_history, list) else None,
+        "batch_correction_metrics_path": batch_metrics_path,
+        "batch_correction_metrics": batch_metrics,
         "training_curve_files": training_curve_files,
         "results": results,
-        "output_files": output_files + training_curve_files,
+        "output_files": output_files + training_curve_files + [batch_metrics_path],
     }
     summary_path = output_dir / "clustering_summary.json"
     with open(summary_path, "w", encoding="utf-8") as handle:

@@ -1,0 +1,11 @@
+dataset,method,mode,k,spatial_agreement
+CRC,spa_mo_model,joint,10,0.46076032279117857
+CRC,spa_mo_model,joint,8,0.49232263847588015
+CRC,spa_mo_model,joint,15,0.352691322755608
+CRC,spa_mo_model,independent,10,0.3939798164716225
+CRC,spa_mo_model,independent,8,0.4789235425168361
+CRC,spa_mo_model,independent,15,0.32517141241929437
+CRC,spa_mo_model,joint,20,0.28504481381212965
+CRC,spa_mo_model,joint,25,0.2463519872315194
+CRC,spa_mo_model,independent,25,0.22021478234502978
+CRC,spa_mo_model,independent,20,0.2545456875857818

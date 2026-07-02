@@ -56,6 +56,53 @@
     "s2": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionB/adata_RNA.h5ad",
     "s3": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionC/adata_RNA.h5ad"
   },
+  "batch_correction_metrics_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/batch_correction_metrics.csv",
+  "batch_correction_metrics": {
+    "dataset": "MouseBrain",
+    "method": "spa_mo_model",
+    "batch_key": "section",
+    "batch_label": "section",
+    "n_obs": 7866,
+    "n_obs_total": 7866,
+    "n_valid_total": 7866,
+    "n_used": 7866,
+    "n_batches": 3,
+    "batch_categories": "s1,s2,s3",
+    "batch_counts": {
+      "s1": 2384,
+      "s2": 2820,
+      "s3": 2662
+    },
+    "max_samples": 50000,
+    "sample_size_requested": 50000,
+    "seed": 0,
+    "knn_backend": "sklearn_exact",
+    "embedding_scaled": true,
+    "bASW_raw": 0.0015938791035878784,
+    "bASW": 0.9984061208964121,
+    "bASW_sample_size": 7866,
+    "bLISI_raw": 2.46039609908997,
+    "bLISI": 0.7301980495449849,
+    "bLISI_neighbors": 90,
+    "kBET_rejection_rate": 0.7599796592931605,
+    "kBET": 0.24002034070683953,
+    "kBET_neighbors": 50,
+    "kBET_alpha": 0.05,
+    "PCR_batch_R2": 0.01336064378560235,
+    "PCR_score": 0.9866393562143977,
+    "PCR_components": 50,
+    "note": "Higher is better for bASW, bLISI, kBET and PCR_score; lower is better for PCR_batch_R2.",
+    "basw_batch_silhouette_mean": 0.0015938791035878784,
+    "basw_score_abs_mean": 0.9984061208964121,
+    "blisi_mean": 2.46039609908997,
+    "blisi_normalized": 0.7301980495449849,
+    "n_neighbors": 90,
+    "kbet_rejection_rate": 0.7599796592931605,
+    "kbet_acceptance_rate": 0.24002034070683953,
+    "pcr_batch_r2": 0.01336064378560235,
+    "pcr_score": 0.9866393562143977,
+    "pcr_n_components": 50
+  },
   "joint": {
     "5": {
       "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k5",
@@ -77,14 +124,14 @@
       "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k6/section_cluster_count.csv",
       "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k6/spatial_continuity.csv",
       "max_section_fraction_by_cluster": [
-        0.4089184060721063,
+        0.402088772845953,
+        0.35184224182667356,
+        0.4085308056872038,
         0.36187845303867405,
-        0.3523908523908524,
-        0.3444730077120823,
-        0.40209424083769635,
-        0.3895870736086176
+        0.34585492227979275,
+        0.38883888388838883
       ],
-      "mean_spatial_neighbor_agreement": 0.8217439058988593
+      "mean_spatial_neighbor_agreement": 0.8216886385795622
     },
     "8": {
       "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/joint_k8",
@@ -134,7 +181,7 @@
       "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k6",
       "section_cluster_count_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k6/section_cluster_count.csv",
       "spatial_continuity_path": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k6/spatial_continuity.csv",
-      "mean_spatial_neighbor_agreement": 0.8325991446484377
+      "mean_spatial_neighbor_agreement": 0.832579444096822
     },
     "8": {
       "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering/independent_k8",

@@ -21,6 +21,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.neighbors import NearestNeighbors
 
@@ -28,6 +29,8 @@ from sklearn.neighbors import NearestNeighbors
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from batch_correction_metrics import compute_batch_correction_metrics
 
 
 def parse_args():
@@ -41,6 +44,25 @@ def parse_args():
     parser.add_argument("--dpi", type=int, default=250, help="Spatial plot DPI.")
     parser.add_argument("--point_size", type=float, default=8.0, help="Spatial scatter point size.")
     parser.add_argument("--no_invert_y", action="store_true", help="Do not invert y axis in spatial plots.")
+    parser.add_argument(
+        "--batch_metrics_max_samples",
+        "--batch_metric_max_samples",
+        "--batch_metric_sample_size",
+        type=int,
+        default=50000,
+        help="Maximum spots used for batch metrics; <=0 uses all valid spots.",
+    )
+    parser.add_argument("--batch_asw_sample_size", type=int, default=10000)
+    parser.add_argument(
+        "--batch_lisi_neighbors",
+        "--batch_metric_neighbors",
+        type=int,
+        default=90,
+    )
+    parser.add_argument("--kbet_neighbors", type=int, default=50)
+    parser.add_argument("--batch_metric_seed", type=int, default=0)
+    parser.add_argument("--kbet_alpha", type=float, default=0.05)
+    parser.add_argument("--pcr_components", "--pcr_n_components", type=int, default=50)
     return parser.parse_args()
 
 
@@ -195,6 +217,38 @@ def spatial_neighbor_agreement(coords, labels, k: int = 6):
     return float(np.mean(same))
 
 
+def save_batch_correction_metrics(
+    output_dir: Path,
+    embeddings: dict[str, np.ndarray],
+    section_order: list[str],
+    args,
+) -> tuple[dict[str, Any], str]:
+    stacked = np.vstack([embeddings[section] for section in section_order])
+    batch_labels = np.concatenate(
+        [
+            np.full(embeddings[section].shape[0], section, dtype=object)
+            for section in section_order
+        ]
+    )
+    metrics = compute_batch_correction_metrics(
+        stacked,
+        batch_labels,
+        dataset="MouseBrain",
+        method="spa_mo_model",
+        batch_label_name="section",
+        max_samples=int(args.batch_metrics_max_samples),
+        asw_sample_size=int(args.batch_asw_sample_size),
+        lisi_neighbors=int(args.batch_lisi_neighbors),
+        kbet_neighbors=int(args.kbet_neighbors),
+        seed=int(args.batch_metric_seed),
+        kbet_alpha=float(args.kbet_alpha),
+        pcr_components=int(args.pcr_components),
+    )
+    path = output_dir / "batch_correction_metrics.csv"
+    pd.DataFrame([metrics]).to_csv(path, index=False)
+    return metrics, str(path)
+
+
 def run_joint_clustering(
     embeddings,
     spatial,
@@ -321,6 +375,12 @@ def main():
     embeddings = load_embeddings(embedding_dir, section_order)
     spatial, obs_names, spatial_source_paths = load_spatial_from_config(config, section_order, spatial_key)
     input_info = validate_alignment(embeddings, spatial, obs_names)
+    batch_metrics, batch_metrics_path = save_batch_correction_metrics(
+        output_dir,
+        embeddings,
+        section_order,
+        args,
+    )
 
     summary = {
         "embedding_dir": str(embedding_dir),
@@ -333,6 +393,8 @@ def main():
         "invert_y": not args.no_invert_y,
         "inputs": input_info,
         "spatial_source_paths": spatial_source_paths,
+        "batch_correction_metrics_path": batch_metrics_path,
+        "batch_correction_metrics": batch_metrics,
         "joint": {},
         "independent": {},
     }
