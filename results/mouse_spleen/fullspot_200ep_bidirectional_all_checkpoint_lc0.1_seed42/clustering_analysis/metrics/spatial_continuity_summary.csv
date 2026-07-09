@@ -1,0 +1,17 @@
+section,neighbor_same_cluster_fraction,mode,k
+Mouse_Spleen1,0.4906542056074766,independent,5
+Mouse_Spleen2,0.5249277456647399,independent,5
+Mouse_Spleen1,0.4885773624091381,joint,5
+Mouse_Spleen2,0.504395472061657,joint,5
+Mouse_Spleen1,0.3644210799584631,independent,8
+Mouse_Spleen2,0.3736753371868979,independent,8
+Mouse_Spleen1,0.3613707165109034,joint,8
+Mouse_Spleen2,0.3689185934489403,joint,8
+Mouse_Spleen1,0.2938084112149532,independent,10
+Mouse_Spleen2,0.3240004816955684,independent,10
+Mouse_Spleen1,0.2988058151609553,joint,10
+Mouse_Spleen2,0.3103925818882466,joint,10
+Mouse_Spleen1,0.2559060228452752,independent,12
+Mouse_Spleen2,0.2737235067437379,independent,12
+Mouse_Spleen1,0.2547377985462097,joint,12
+Mouse_Spleen2,0.2654744701348747,joint,12

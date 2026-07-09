@@ -1,0 +1,18 @@
+{
+  "dataset": "Mouse Thymus",
+  "run_dir": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42",
+  "analysis_dir": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis",
+  "clustering_dir": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis",
+  "sections": [
+    "Mouse_Thymus1",
+    "Mouse_Thymus2",
+    "Mouse_Thymus3",
+    "Mouse_Thymus4"
+  ],
+  "metric_sample_size": 10000,
+  "spatial_neighbor_k": 6,
+  "metrics": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/common_clustering_metrics.csv",
+  "section_diagnostics": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/section_diagnostic_metrics.csv",
+  "spatial_continuity": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/spatial_continuity_summary.csv",
+  "summary": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/SUMMARY.md"
+}

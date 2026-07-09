@@ -1,0 +1,16 @@
+{
+  "dataset": "CRC Stereo-CITE-seq",
+  "run_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42",
+  "analysis_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25",
+  "clustering_dir": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25",
+  "sections": [
+    "CRC_003",
+    "CRC_006"
+  ],
+  "metric_sample_size": 10000,
+  "spatial_neighbor_k": 6,
+  "metrics": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/metrics/common_clustering_metrics.csv",
+  "section_diagnostics": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/metrics/section_diagnostic_metrics.csv",
+  "spatial_continuity": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/metrics/spatial_continuity_summary.csv",
+  "summary": "/home/hujinlan/spa_mo_model/results/crc_stereocite/fullspot_200ep_bidirectional_ot_attention_all_checkpoint_detailmem_lc0.1_seed42/clustering_analysis_k20_25/SUMMARY.md"
+}

@@ -480,10 +480,46 @@ def main() -> None:
         "output_files": output_files + training_curve_files + [batch_metrics_path],
     }
     summary_path = output_dir / "clustering_summary.json"
+    if summary_path.exists():
+        existing = load_json(summary_path)
+        keyed_results = {
+            (item.get("mode"), int(item.get("n_clusters"))): item
+            for item in existing.get("results", [])
+            if item.get("mode") and item.get("n_clusters") is not None
+        }
+        keyed_results.update(
+            {
+                (item.get("mode"), int(item.get("n_clusters"))): item
+                for item in summary["results"]
+            }
+        )
+        summary["results"] = [
+            keyed_results[key]
+            for key in sorted(keyed_results, key=lambda x: (x[1], x[0]))
+        ]
+        summary["n_clusters"] = sorted(
+            {int(k) for k in existing.get("n_clusters", [])}
+            | {int(k) for k in n_clusters_list}
+        )
+        summary["output_files"] = sorted(
+            set(existing.get("output_files", [])) | set(summary["output_files"])
+        )
     with open(summary_path, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
     output_files.append(str(summary_path))
 
+    from complete_spa_mo_analysis import complete_analysis
+
+    complete_analysis(
+        dataset="CRC Stereo-CITE-seq",
+        run_dir=input_dir,
+        analysis_dir=output_dir,
+        clustering_dir=output_dir,
+        sections=SECTION_ORDER,
+        seed=int(args.seed),
+        metric_sample_size=10000,
+        spatial_neighbor_k=6,
+    )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     print("CRC_STEREOCITE_CLUSTERING: PASS")
 

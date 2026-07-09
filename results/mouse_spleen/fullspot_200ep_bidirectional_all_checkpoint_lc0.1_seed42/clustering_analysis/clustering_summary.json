@@ -1,0 +1,267 @@
+{
+  "input_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42",
+  "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis",
+  "seed": 42,
+  "n_clusters": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "kmeans_method": "minibatch",
+  "batch_size": 8192,
+  "n_init": 10,
+  "max_iter": 300,
+  "plot_max_points": 0,
+  "point_size": 10.0,
+  "dpi": 220,
+  "sections": [
+    "Mouse_Spleen1",
+    "Mouse_Spleen2"
+  ],
+  "embedding_shapes": {
+    "Mouse_Spleen1": [
+      2568,
+      128
+    ],
+    "Mouse_Spleen2": [
+      2768,
+      128
+    ]
+  },
+  "spatial_shapes": {
+    "Mouse_Spleen1": [
+      2568,
+      2
+    ],
+    "Mouse_Spleen2": [
+      2768,
+      2
+    ]
+  },
+  "selected_spot_index_shapes": {
+    "Mouse_Spleen1": [
+      2568
+    ],
+    "Mouse_Spleen2": [
+      2768
+    ]
+  },
+  "source_paths": {
+    "run_summary": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/run_summary.json",
+    "loss_history": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/loss_history.json",
+    "embedding_Mouse_Spleen1": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Spleen1.npy",
+    "spatial_Mouse_Spleen1": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Mouse_Spleen1.npy",
+    "spot_index_Mouse_Spleen1": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Mouse_Spleen1.npy",
+    "embedding_Mouse_Spleen2": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Spleen2.npy",
+    "spatial_Mouse_Spleen2": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Mouse_Spleen2.npy",
+    "spot_index_Mouse_Spleen2": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Mouse_Spleen2.npy"
+  },
+  "run_summary_mode": "train",
+  "loss_history_epochs": 200,
+  "batch_correction_metrics_path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/batch_correction_metrics.csv",
+  "batch_correction_metrics": {
+    "dataset": "Mouse Spleen",
+    "method": "spa_mo_model",
+    "batch_key": "section",
+    "batch_label": "section",
+    "n_obs": 5336,
+    "n_obs_total": 5336,
+    "n_valid_total": 5336,
+    "n_used": 5336,
+    "n_batches": 2,
+    "batch_categories": "Mouse_Spleen1,Mouse_Spleen2",
+    "batch_counts": {
+      "Mouse_Spleen1": 2568,
+      "Mouse_Spleen2": 2768
+    },
+    "max_samples": 50000,
+    "sample_size_requested": 50000,
+    "seed": 0,
+    "knn_backend": "sklearn_exact",
+    "embedding_scaled": true,
+    "bASW_raw": 7.857294816856011e-05,
+    "bASW": 0.9999214270518314,
+    "bASW_sample_size": 5336,
+    "bLISI_raw": 1.9818350625665917,
+    "bLISI": 0.9818350625665917,
+    "bLISI_neighbors": 90,
+    "kBET_rejection_rate": 0.030547226386806597,
+    "kBET": 0.9694527736131934,
+    "kBET_neighbors": 50,
+    "kBET_alpha": 0.05,
+    "PCR_batch_R2": 0.00022599043751202948,
+    "PCR_score": 0.999774009562488,
+    "PCR_components": 50,
+    "note": "Higher is better for bASW, bLISI, kBET and PCR_score; lower is better for PCR_batch_R2.",
+    "basw_batch_silhouette_mean": 7.857294816856011e-05,
+    "basw_score_abs_mean": 0.9999214270518314,
+    "blisi_mean": 1.9818350625665917,
+    "blisi_normalized": 0.9818350625665917,
+    "n_neighbors": 90,
+    "kbet_rejection_rate": 0.030547226386806597,
+    "kbet_acceptance_rate": 0.9694527736131934,
+    "pcr_batch_r2": 0.00022599043751202948,
+    "pcr_score": 0.999774009562488,
+    "pcr_n_components": 50
+  },
+  "training_curve_files": [
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/total_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/reconstruction_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/weighted_crossview_loss.png"
+  ],
+  "results": [
+    {
+      "mode": "joint",
+      "n_clusters": 5,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 5,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 8,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 8,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 10,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 10,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 12,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 12,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen2_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen2_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_cluster_counts.csv"
+      ]
+    }
+  ],
+  "output_files": [
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen2_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Mouse_Spleen2_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/total_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/reconstruction_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/weighted_crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/batch_correction_metrics.csv"
+  ]
+}

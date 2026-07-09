@@ -1,0 +1,11 @@
+mode,section,cluster,count,section_fraction
+joint,Mouse_Spleen1,0,402,0.15654205607476634
+joint,Mouse_Spleen1,1,493,0.19197819314641745
+joint,Mouse_Spleen1,2,554,0.21573208722741433
+joint,Mouse_Spleen1,3,633,0.24649532710280375
+joint,Mouse_Spleen1,4,486,0.18925233644859812
+joint,Mouse_Spleen2,0,470,0.16979768786127167
+joint,Mouse_Spleen2,1,529,0.19111271676300579
+joint,Mouse_Spleen2,2,556,0.20086705202312138
+joint,Mouse_Spleen2,3,720,0.26011560693641617
+joint,Mouse_Spleen2,4,493,0.17810693641618497

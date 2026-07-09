@@ -433,6 +433,18 @@ def main():
     with open(output_dir / "clustering_analysis_summary.json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
 
+    from complete_spa_mo_analysis import complete_analysis
+
+    complete_analysis(
+        dataset="MouseBrain",
+        run_dir=embedding_dir.parent,
+        analysis_dir=output_dir.parent,
+        clustering_dir=output_dir,
+        sections=section_order,
+        seed=int(args.random_state),
+        metric_sample_size=5000,
+        spatial_neighbor_k=6,
+    )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     print("MOUSEBRAIN_CLUSTERING_ANALYSIS: PASS")
 

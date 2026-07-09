@@ -1,0 +1,11 @@
+mode,section,cluster,count,section_fraction
+joint,Human_Lymph_Node_A1,0,740,0.21239954075774972
+joint,Human_Lymph_Node_A1,1,368,0.10562571756601608
+joint,Human_Lymph_Node_A1,2,1157,0.332089552238806
+joint,Human_Lymph_Node_A1,3,460,0.13203214695752008
+joint,Human_Lymph_Node_A1,4,759,0.21785304247990814
+joint,Human_Lymph_Node_D1,0,735,0.2188151235486752
+joint,Human_Lymph_Node_D1,1,310,0.0922893718368562
+joint,Human_Lymph_Node_D1,2,1095,0.32598987793986306
+joint,Human_Lymph_Node_D1,3,417,0.12414409050312593
+joint,Human_Lymph_Node_D1,4,802,0.2387615361714796

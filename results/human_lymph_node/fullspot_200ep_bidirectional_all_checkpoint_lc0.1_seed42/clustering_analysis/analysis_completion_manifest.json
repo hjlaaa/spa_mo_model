@@ -1,0 +1,16 @@
+{
+  "dataset": "Human Lymph Node",
+  "run_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42",
+  "analysis_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis",
+  "clustering_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis",
+  "sections": [
+    "Human_Lymph_Node_A1",
+    "Human_Lymph_Node_D1"
+  ],
+  "metric_sample_size": 10000,
+  "spatial_neighbor_k": 6,
+  "metrics": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/common_clustering_metrics.csv",
+  "section_diagnostics": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/section_diagnostic_metrics.csv",
+  "spatial_continuity": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/spatial_continuity_summary.csv",
+  "summary": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/SUMMARY.md"
+}

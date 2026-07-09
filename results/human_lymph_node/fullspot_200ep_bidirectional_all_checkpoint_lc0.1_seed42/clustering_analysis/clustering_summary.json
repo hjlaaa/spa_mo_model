@@ -1,0 +1,267 @@
+{
+  "input_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42",
+  "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis",
+  "seed": 42,
+  "n_clusters": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "kmeans_method": "minibatch",
+  "batch_size": 8192,
+  "n_init": 10,
+  "max_iter": 300,
+  "plot_max_points": 0,
+  "point_size": 10.0,
+  "dpi": 220,
+  "sections": [
+    "Human_Lymph_Node_A1",
+    "Human_Lymph_Node_D1"
+  ],
+  "embedding_shapes": {
+    "Human_Lymph_Node_A1": [
+      3484,
+      128
+    ],
+    "Human_Lymph_Node_D1": [
+      3359,
+      128
+    ]
+  },
+  "spatial_shapes": {
+    "Human_Lymph_Node_A1": [
+      3484,
+      2
+    ],
+    "Human_Lymph_Node_D1": [
+      3359,
+      2
+    ]
+  },
+  "selected_spot_index_shapes": {
+    "Human_Lymph_Node_A1": [
+      3484
+    ],
+    "Human_Lymph_Node_D1": [
+      3359
+    ]
+  },
+  "source_paths": {
+    "run_summary": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/run_summary.json",
+    "loss_history": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/loss_history.json",
+    "embedding_Human_Lymph_Node_A1": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Human_Lymph_Node_A1.npy",
+    "spatial_Human_Lymph_Node_A1": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Human_Lymph_Node_A1.npy",
+    "spot_index_Human_Lymph_Node_A1": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Human_Lymph_Node_A1.npy",
+    "embedding_Human_Lymph_Node_D1": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Human_Lymph_Node_D1.npy",
+    "spatial_Human_Lymph_Node_D1": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Human_Lymph_Node_D1.npy",
+    "spot_index_Human_Lymph_Node_D1": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Human_Lymph_Node_D1.npy"
+  },
+  "run_summary_mode": "train",
+  "loss_history_epochs": 200,
+  "batch_correction_metrics_path": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/batch_correction_metrics.csv",
+  "batch_correction_metrics": {
+    "dataset": "Human Lymph Node",
+    "method": "spa_mo_model",
+    "batch_key": "section",
+    "batch_label": "section",
+    "n_obs": 6843,
+    "n_obs_total": 6843,
+    "n_valid_total": 6843,
+    "n_used": 6843,
+    "n_batches": 2,
+    "batch_categories": "Human_Lymph_Node_A1,Human_Lymph_Node_D1",
+    "batch_counts": {
+      "Human_Lymph_Node_A1": 3484,
+      "Human_Lymph_Node_D1": 3359
+    },
+    "max_samples": 50000,
+    "sample_size_requested": 50000,
+    "seed": 0,
+    "knn_backend": "sklearn_exact",
+    "embedding_scaled": true,
+    "bASW_raw": 0.0010932205057784705,
+    "bASW": 0.9989067794942216,
+    "bASW_sample_size": 6843,
+    "bLISI_raw": 1.9330825143741441,
+    "bLISI": 0.9330825143741441,
+    "bLISI_neighbors": 90,
+    "kBET_rejection_rate": 0.17594622241706853,
+    "kBET": 0.8240537775829315,
+    "kBET_neighbors": 50,
+    "kBET_alpha": 0.05,
+    "PCR_batch_R2": 0.0010903213430891751,
+    "PCR_score": 0.9989096786569108,
+    "PCR_components": 50,
+    "note": "Higher is better for bASW, bLISI, kBET and PCR_score; lower is better for PCR_batch_R2.",
+    "basw_batch_silhouette_mean": 0.0010932205057784705,
+    "basw_score_abs_mean": 0.9989067794942216,
+    "blisi_mean": 1.9330825143741441,
+    "blisi_normalized": 0.9330825143741441,
+    "n_neighbors": 90,
+    "kbet_rejection_rate": 0.17594622241706853,
+    "kbet_acceptance_rate": 0.8240537775829315,
+    "pcr_batch_r2": 0.0010903213430891751,
+    "pcr_score": 0.9989096786569108,
+    "pcr_n_components": 50
+  },
+  "training_curve_files": [
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/total_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/reconstruction_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/weighted_crossview_loss.png"
+  ],
+  "results": [
+    {
+      "mode": "joint",
+      "n_clusters": 5,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 5,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 8,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 8,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 10,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 10,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "joint",
+      "n_clusters": 12,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_cluster_counts.csv"
+      ]
+    },
+    {
+      "mode": "independent",
+      "n_clusters": 12,
+      "kmeans_method": "minibatch",
+      "output_dir": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12",
+      "files": [
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_A1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_A1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_D1_labels.csv",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_D1_spatial.png",
+        "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_cluster_counts.csv"
+      ]
+    }
+  ],
+  "output_files": [
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k5/joint_k5_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k5/independent_k5_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k8/joint_k8_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k8/independent_k8_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k10/joint_k10_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k10/independent_k10_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/joint_k12/joint_k12_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_A1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_A1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_D1_labels.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_Human_Lymph_Node_D1_spatial.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/independent_k12/independent_k12_cluster_counts.csv",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/total_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/reconstruction_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/training_curves/weighted_crossview_loss.png",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/batch_correction_metrics.csv"
+  ]
+}

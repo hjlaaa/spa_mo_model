@@ -1,0 +1,17 @@
+section,neighbor_same_cluster_fraction,mode,k
+Human_Lymph_Node_A1,0.6316972828166858,independent,5
+Human_Lymph_Node_D1,0.6043465317058648,independent,5
+Human_Lymph_Node_A1,0.6249043245311902,joint,5
+Human_Lymph_Node_D1,0.6071251364493401,joint,5
+Human_Lymph_Node_A1,0.5573574435514734,independent,8
+Human_Lymph_Node_D1,0.511759452217922,independent,8
+Human_Lymph_Node_A1,0.5241102181400689,joint,8
+Human_Lymph_Node_D1,0.5035228738711919,joint,8
+Human_Lymph_Node_A1,0.4505836203597397,independent,10
+Human_Lymph_Node_D1,0.4779200158777414,independent,10
+Human_Lymph_Node_A1,0.459433601224646,joint,10
+Human_Lymph_Node_D1,0.453160662895703,joint,10
+Human_Lymph_Node_A1,0.4228855721393035,independent,12
+Human_Lymph_Node_D1,0.413764017068572,independent,12
+Human_Lymph_Node_A1,0.4208285495598928,joint,12
+Human_Lymph_Node_D1,0.415947206509874,joint,12

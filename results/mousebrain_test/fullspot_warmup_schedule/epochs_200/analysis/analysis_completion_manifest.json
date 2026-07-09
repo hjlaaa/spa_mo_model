@@ -1,0 +1,17 @@
+{
+  "dataset": "MouseBrain",
+  "run_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200",
+  "analysis_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis",
+  "clustering_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/clustering",
+  "sections": [
+    "s1",
+    "s2",
+    "s3"
+  ],
+  "metric_sample_size": 5000,
+  "spatial_neighbor_k": 6,
+  "metrics": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/metrics/common_clustering_metrics.csv",
+  "section_diagnostics": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/metrics/section_diagnostic_metrics.csv",
+  "spatial_continuity": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/metrics/spatial_continuity_summary.csv",
+  "summary": "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/analysis/SUMMARY.md"
+}

@@ -1,0 +1,5 @@
+section,rna_shape,adt_shape_raw,paired_spot_order,rna_var_unique,adt_shared_after_mapping,rna_obs_vs_obsm_spatial_equal,canonical_coordinate_source
+Mouse_Thymus1,4697x23622,4697x51,True,True,17,False,"RNA obs[x,y]"
+Mouse_Thymus2,4253x23529,4253x19,True,True,17,True,"RNA obs[x,y]"
+Mouse_Thymus3,4646x23960,4646x19,True,True,17,True,"RNA obs[x,y]"
+Mouse_Thymus4,4228x23221,4228x19,True,True,17,True,"RNA obs[x,y]"

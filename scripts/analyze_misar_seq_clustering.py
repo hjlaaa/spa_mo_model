@@ -20,9 +20,12 @@ from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.metrics import (
     adjusted_rand_score,
     calinski_harabasz_score,
+    completeness_score,
     davies_bouldin_score,
+    homogeneity_score,
     normalized_mutual_info_score,
     silhouette_score,
+    v_measure_score,
 )
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
@@ -53,7 +56,12 @@ def parse_args():
     parser.add_argument("--label_keys", default=",".join(DEFAULT_LABEL_KEYS))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dpi", type=int, default=220)
-    parser.add_argument("--point_size", type=float, default=8.0)
+    parser.add_argument(
+        "--point_size",
+        type=float,
+        default=15.0,
+        help="MISAR-seq spatial clustering spot size (default: 15).",
+    )
     parser.add_argument("--plot_max_points", type=int, default=0)
     parser.add_argument("--kmeans_method", choices=["minibatch", "kmeans"], default="kmeans")
     parser.add_argument("--batch_size", type=int, default=2048)
@@ -244,6 +252,9 @@ def supervised_metrics(
             "n_true_labels": int(np.unique(true).shape[0]),
             "ari": float(adjusted_rand_score(true, pred)),
             "nmi": float(normalized_mutual_info_score(true, pred)),
+            "homogeneity": float(homogeneity_score(true, pred)),
+            "completeness": float(completeness_score(true, pred)),
+            "v_measure": float(v_measure_score(true, pred)),
             "label_asw": None,
             "label_asw_scaled": None,
         }
@@ -375,6 +386,16 @@ def run_joint(
     cluster_metrics = safe_embedding_cluster_metrics(stacked, labels_all, args.metric_sample_size, args.seed)
     for row in supervised_metrics(stacked, labels_all, label_table, label_keys, args.metric_sample_size, args.seed):
         metrics_rows.append({"mode": "joint", "n_clusters": n_clusters, **cluster_metrics, **row})
+    section_truth = label_table["section"].astype(str).to_numpy()
+    section_idx = sampled_indices(
+        section_truth.shape[0], args.metric_sample_size, args.seed
+    )
+    section_asw = float(
+        silhouette_score(
+            StandardScaler().fit_transform(stacked[section_idx]),
+            section_truth[section_idx],
+        )
+    )
     metrics_rows.append(
         {
             "mode": "joint",
@@ -383,10 +404,13 @@ def run_joint(
             "label_key": "section",
             "n_labeled": int(labels_all.shape[0]),
             "n_true_labels": int(len(section_order)),
-            "ari": float(adjusted_rand_score(label_table["section"].astype(str), labels_all)),
-            "nmi": float(normalized_mutual_info_score(label_table["section"].astype(str), labels_all)),
-            "label_asw": None,
-            "label_asw_scaled": None,
+            "ari": float(adjusted_rand_score(section_truth, labels_all)),
+            "nmi": float(normalized_mutual_info_score(section_truth, labels_all)),
+            "homogeneity": float(homogeneity_score(section_truth, labels_all)),
+            "completeness": float(completeness_score(section_truth, labels_all)),
+            "v_measure": float(v_measure_score(section_truth, labels_all)),
+            "label_asw": section_asw,
+            "label_asw_scaled": float((section_asw + 1.0) / 2.0),
         }
     )
 
@@ -531,6 +555,7 @@ def main() -> None:
         "output_dir": str(output_dir),
         "section_order": section_order,
         "seed": int(args.seed),
+        "point_size": float(args.point_size),
         "n_clusters": n_clusters_list,
         "label_keys": label_keys,
         "kmeans_method": args.kmeans_method,
@@ -552,6 +577,18 @@ def main() -> None:
     summary_path = output_dir / "clustering_summary.json"
     with open(summary_path, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
+    from complete_spa_mo_analysis import complete_analysis
+
+    complete_analysis(
+        dataset="MISAR-seq",
+        run_dir=input_dir,
+        analysis_dir=output_dir,
+        clustering_dir=output_dir,
+        sections=section_order,
+        seed=int(args.seed),
+        metric_sample_size=int(args.metric_sample_size),
+        spatial_neighbor_k=int(args.spatial_neighbor_k),
+    )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     print("MISAR_SEQ_CLUSTERING_ANALYSIS: PASS")
 
