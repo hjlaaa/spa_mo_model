@@ -80,9 +80,9 @@ def get_default_preprocess_config():
 def get_default_model_config():
     """Return the first-stage multimodal model configuration.
 
-    This stage intentionally reuses only COSIE's within-section cross-view
-    contrastive loss. The encoder and fusion module are project-specific MLPs,
-    not COSIE's GraphAutoencoder or Prediction_mlp.
+    The encoder and fusion module are project-specific MLPs. Cross-view
+    alignment defaults to same-spot symmetric InfoNCE with VICReg regularizers
+    on a loss-only modality-specific projection space.
     """
 
     return {
@@ -116,13 +116,33 @@ def get_default_model_config():
             "l2_normalize_output": True,
         },
         "contrastive": {
-            "method": "cosie_crossview",
+            "method": "symmetric_infonce_vicreg",
+            "projection_dim": 64,
+            "projection_hidden_dim": 128,
+            "projection_activation": "GELU",
+            "projection_norm": "LayerNorm",
+            "projection_dropout": 0.0,
+            "temperature": 0.2,
+            # Corrected COSIE uses the same temperature to turn each spot's
+            # latent dimensions into a non-negative probability distribution.
+            "corrected_cosie_eps": 1e-8,
+            "normalize_for_infonce": True,
+            "infonce_normalization_eps": 1e-4,
+            "negative_mode": "in_batch",
+            # 2048 is the safe first setting for the large CRC dataset. The
+            # loss constructs at most a 2048 x 2048 fp32 similarity matrix.
+            "max_batch_size": 2048,
+            "sampling_seed": 0,
+            "lambda_var": 1.0,
+            "lambda_cov": 0.04,
+            "variance_target": 1.0,
+            "vicreg_eps": 1e-4,
+            "pair_reduction": "mean",
+            "section_reduction": "mean",
+            "detach_target": False,
+            # Consumed by legacy_cosie_dimension and corrected_cosie_dimension.
             "gamma": 5.0,
-            "loss_weight": 1.0,
-            "pairwise_all_observed_modalities": True,
-            "use_infonce": False,
-            "use_temperature": False,
-            "use_spot_positive_negative_pairs": False,
+            "legacy_section_reduction": "sum",
         },
         "fusion": {
             "mode": "concat_mlp_projection",

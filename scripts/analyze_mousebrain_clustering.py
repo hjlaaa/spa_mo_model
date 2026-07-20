@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from sklearn.neighbors import NearestNeighbors
 
 
@@ -40,6 +41,17 @@ def parse_args():
     parser.add_argument("--output_dir", required=True, help="Output directory for clustering results.")
     parser.add_argument("--cluster_list", default="5,6,8,10", help="Comma-separated KMeans cluster counts.")
     parser.add_argument("--random_state", type=int, default=0, help="KMeans random state.")
+    parser.add_argument(
+        "--metric_seed",
+        type=int,
+        default=0,
+        help="Fixed subsampling seed for embedding metrics; independent of KMeans seed.",
+    )
+    parser.add_argument(
+        "--label_keys",
+        default="annotations,RegionLoupe",
+        help="Comma-separated biological obs columns used for ARI/NMI.",
+    )
     parser.add_argument("--spatial_key", default=None, help="Override spatial key; defaults to config preprocessing.spatial_key.")
     parser.add_argument("--dpi", type=int, default=250, help="Spatial plot DPI.")
     parser.add_argument("--point_size", type=float, default=8.0, help="Spatial scatter point size.")
@@ -84,6 +96,15 @@ def parse_cluster_list(text: str) -> list[int]:
     return values
 
 
+def parse_label_keys(text: str) -> list[str]:
+    values = [item.strip() for item in text.split(",") if item.strip()]
+    if not values:
+        raise ValueError("--label_keys must contain at least one obs column.")
+    if len(set(values)) != len(values):
+        raise ValueError("--label_keys contains duplicate columns.")
+    return values
+
+
 def load_embeddings(embedding_dir: Path, section_order: list[str]) -> dict[str, np.ndarray]:
     embeddings = {}
     for section in section_order:
@@ -97,10 +118,16 @@ def load_embeddings(embedding_dir: Path, section_order: list[str]) -> dict[str, 
     return embeddings
 
 
-def load_spatial_from_config(config: dict[str, Any], section_order: list[str], spatial_key: str):
+def load_spatial_from_config(
+    config: dict[str, Any],
+    section_order: list[str],
+    spatial_key: str,
+    label_keys: list[str],
+):
     section_by_id = {section["section_id"]: section for section in config["sections"]}
     spatial = {}
     obs_names = {}
+    biological_labels = {}
     source_paths = {}
     for section in section_order:
         if section not in section_by_id:
@@ -116,8 +143,18 @@ def load_spatial_from_config(config: dict[str, Any], section_order: list[str], s
             raise ValueError(f"Spatial coordinates for {section} must be [N, >=2], got {coords.shape}.")
         spatial[section] = coords[:, :2].copy()
         obs_names[section] = np.asarray(adata.obs_names.astype(str))
+        missing_label_keys = [key for key in label_keys if key not in adata.obs]
+        if missing_label_keys:
+            raise KeyError(
+                f"{section} RNA h5ad is missing biological label columns: "
+                f"{missing_label_keys}."
+            )
+        biological_labels[section] = {
+            key: adata.obs[key].astype(object).to_numpy(copy=True)
+            for key in label_keys
+        }
         source_paths[section] = str(rna_path)
-    return spatial, obs_names, source_paths
+    return spatial, obs_names, biological_labels, source_paths
 
 
 def validate_alignment(embeddings, spatial, obs_names):
@@ -217,6 +254,115 @@ def spatial_neighbor_agreement(coords, labels, k: int = 6):
     return float(np.mean(same))
 
 
+def compute_biological_label_metrics(
+    labels_by_section: dict[str, np.ndarray],
+    biological_labels: dict[str, dict[str, np.ndarray]],
+    section_order: list[str],
+    label_keys: list[str],
+    mode: str,
+    n_clusters: int,
+) -> list[dict[str, Any]]:
+    """Compute fixed-label ARI/NMI without selecting K from the scores."""
+
+    rows: list[dict[str, Any]] = []
+    for label_key in label_keys:
+        section_rows: list[dict[str, Any]] = []
+        pooled_true: list[np.ndarray] = []
+        pooled_pred: list[np.ndarray] = []
+        for section in section_order:
+            true_values = np.asarray(biological_labels[section][label_key], dtype=object)
+            predicted = np.asarray(labels_by_section[section], dtype=int)
+            if true_values.shape[0] != predicted.shape[0]:
+                raise ValueError(
+                    f"{section} label/prediction row mismatch for {label_key}: "
+                    f"{true_values.shape[0]} vs {predicted.shape[0]}."
+                )
+            valid = np.asarray(pd.notna(true_values), dtype=bool)
+            true_valid = true_values[valid].astype(str)
+            pred_valid = predicted[valid]
+            if true_valid.size < 2 or np.unique(true_valid).size < 2:
+                raise ValueError(
+                    f"{section} label {label_key!r} needs at least two valid classes."
+                )
+            row = {
+                "mode": mode,
+                "n_clusters": int(n_clusters),
+                "label_key": label_key,
+                "scope": "section",
+                "section": section,
+                "n_spots": int(true_valid.size),
+                "n_true_classes": int(np.unique(true_valid).size),
+                "n_predicted_clusters": int(np.unique(pred_valid).size),
+                "ari": float(adjusted_rand_score(true_valid, pred_valid)),
+                "nmi": float(
+                    normalized_mutual_info_score(
+                        true_valid,
+                        pred_valid,
+                        average_method="arithmetic",
+                    )
+                ),
+            }
+            rows.append(row)
+            section_rows.append(row)
+            pooled_true.append(true_valid)
+            pooled_pred.append(pred_valid)
+
+        weights = np.asarray([row["n_spots"] for row in section_rows], dtype=float)
+        for scope, weighted in (("section_macro", False), ("section_weighted", True)):
+            aggregate = {
+                "mode": mode,
+                "n_clusters": int(n_clusters),
+                "label_key": label_key,
+                "scope": scope,
+                "section": "__all_sections__",
+                "n_spots": int(weights.sum()),
+                "n_true_classes": int(
+                    np.unique(np.concatenate(pooled_true)).size
+                ),
+                "n_predicted_clusters": int(n_clusters),
+                "ari": float(
+                    np.average(
+                        [row["ari"] for row in section_rows],
+                        weights=weights if weighted else None,
+                    )
+                ),
+                "nmi": float(
+                    np.average(
+                        [row["nmi"] for row in section_rows],
+                        weights=weights if weighted else None,
+                    )
+                ),
+            }
+            rows.append(aggregate)
+
+        # Joint KMeans has one globally consistent cluster-ID space, so a
+        # pooled score is meaningful. Independent section-wise KMeans does not.
+        if mode == "joint":
+            true_all = np.concatenate(pooled_true)
+            pred_all = np.concatenate(pooled_pred)
+            rows.append(
+                {
+                    "mode": mode,
+                    "n_clusters": int(n_clusters),
+                    "label_key": label_key,
+                    "scope": "pooled",
+                    "section": "__all_sections__",
+                    "n_spots": int(true_all.size),
+                    "n_true_classes": int(np.unique(true_all).size),
+                    "n_predicted_clusters": int(np.unique(pred_all).size),
+                    "ari": float(adjusted_rand_score(true_all, pred_all)),
+                    "nmi": float(
+                        normalized_mutual_info_score(
+                            true_all,
+                            pred_all,
+                            average_method="arithmetic",
+                        )
+                    ),
+                }
+            )
+    return rows
+
+
 def save_batch_correction_metrics(
     output_dir: Path,
     embeddings: dict[str, np.ndarray],
@@ -260,6 +406,8 @@ def run_joint_clustering(
     point_size,
     invert_y,
     dpi,
+    biological_labels,
+    label_keys,
 ):
     ensure_dir(output_dir)
     stacked = np.vstack([embeddings[section] for section in section_order])
@@ -303,6 +451,16 @@ def run_joint_clustering(
         for section in section_order
     ]
     write_rows(output_dir / "spatial_continuity.csv", ["section", "neighbor_same_cluster_fraction"], continuity_rows)
+    biological_metric_rows = compute_biological_label_metrics(
+        labels_by_section,
+        biological_labels,
+        section_order,
+        label_keys,
+        mode="joint",
+        n_clusters=n_clusters,
+    )
+    biological_metrics_path = output_dir / "biological_label_metrics.csv"
+    pd.DataFrame(biological_metric_rows).to_csv(biological_metrics_path, index=False)
     return {
         "output_dir": str(output_dir),
         "composition_path": str(output_dir / "cluster_composition.csv"),
@@ -312,6 +470,8 @@ def run_joint_clustering(
             max(row[-len(section_order) :]) for row in composition_rows
         ],
         "mean_spatial_neighbor_agreement": float(np.nanmean([row[1] for row in continuity_rows])),
+        "biological_label_metrics_path": str(biological_metrics_path),
+        "biological_label_metrics": biological_metric_rows,
     }
 
 
@@ -326,6 +486,8 @@ def run_independent_clustering(
     point_size,
     invert_y,
     dpi,
+    biological_labels,
+    label_keys,
 ):
     ensure_dir(output_dir)
     labels_by_section = {}
@@ -354,11 +516,23 @@ def run_independent_clustering(
         for section in section_order
     ]
     write_rows(output_dir / "spatial_continuity.csv", ["section", "neighbor_same_cluster_fraction"], continuity_rows)
+    biological_metric_rows = compute_biological_label_metrics(
+        labels_by_section,
+        biological_labels,
+        section_order,
+        label_keys,
+        mode="independent",
+        n_clusters=n_clusters,
+    )
+    biological_metrics_path = output_dir / "biological_label_metrics.csv"
+    pd.DataFrame(biological_metric_rows).to_csv(biological_metrics_path, index=False)
     return {
         "output_dir": str(output_dir),
         "section_cluster_count_path": str(output_dir / "section_cluster_count.csv"),
         "spatial_continuity_path": str(output_dir / "spatial_continuity.csv"),
         "mean_spatial_neighbor_agreement": float(np.nanmean([row[1] for row in continuity_rows])),
+        "biological_label_metrics_path": str(biological_metrics_path),
+        "biological_label_metrics": biological_metric_rows,
     }
 
 
@@ -368,12 +542,18 @@ def main():
     section_order = list(config.get("section_order") or [section["section_id"] for section in config["sections"]])
     spatial_key = args.spatial_key or config.get("preprocessing", {}).get("spatial_key", "spatial")
     cluster_list = parse_cluster_list(args.cluster_list)
+    label_keys = parse_label_keys(args.label_keys)
     embedding_dir = Path(args.embedding_dir)
     output_dir = Path(args.output_dir)
     ensure_dir(output_dir)
 
     embeddings = load_embeddings(embedding_dir, section_order)
-    spatial, obs_names, spatial_source_paths = load_spatial_from_config(config, section_order, spatial_key)
+    spatial, obs_names, biological_labels, spatial_source_paths = load_spatial_from_config(
+        config,
+        section_order,
+        spatial_key,
+        label_keys,
+    )
     input_info = validate_alignment(embeddings, spatial, obs_names)
     batch_metrics, batch_metrics_path = save_batch_correction_metrics(
         output_dir,
@@ -389,6 +569,8 @@ def main():
         "section_order": section_order,
         "cluster_list": cluster_list,
         "random_state": args.random_state,
+        "metric_seed": args.metric_seed,
+        "label_keys": label_keys,
         "spatial_key": spatial_key,
         "invert_y": not args.no_invert_y,
         "inputs": input_info,
@@ -413,6 +595,8 @@ def main():
             args.point_size,
             invert_y=not args.no_invert_y,
             dpi=args.dpi,
+            biological_labels=biological_labels,
+            label_keys=label_keys,
         )
 
         print(f"Running independent KMeans k={n_clusters}")
@@ -428,7 +612,22 @@ def main():
             args.point_size,
             invert_y=not args.no_invert_y,
             dpi=args.dpi,
+            biological_labels=biological_labels,
+            label_keys=label_keys,
         )
+
+    biological_metric_rows = []
+    for mode in ("joint", "independent"):
+        for n_clusters in cluster_list:
+            biological_metric_rows.extend(
+                summary[mode][str(n_clusters)]["biological_label_metrics"]
+            )
+    biological_metrics_path = output_dir / "biological_label_metrics.csv"
+    pd.DataFrame(biological_metric_rows).to_csv(
+        biological_metrics_path,
+        index=False,
+    )
+    summary["biological_label_metrics_path"] = str(biological_metrics_path)
 
     with open(output_dir / "clustering_analysis_summary.json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
@@ -441,9 +640,10 @@ def main():
         analysis_dir=output_dir.parent,
         clustering_dir=output_dir,
         sections=section_order,
-        seed=int(args.random_state),
+        seed=int(args.metric_seed),
         metric_sample_size=5000,
         spatial_neighbor_k=6,
+        spatial_coords_override=spatial,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     print("MOUSEBRAIN_CLUSTERING_ANALYSIS: PASS")

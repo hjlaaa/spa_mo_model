@@ -61,10 +61,12 @@ def main() -> None:
         "--metric_sample_size", "10000",
         "--batch_metrics_max_samples", "0",
     ]
+    effective_output_dir = RUN_DIR / "clustering_analysis"
+    for index, value in enumerate(sys.argv[:-1]):
+        if value == "--output_dir":
+            effective_output_dir = Path(sys.argv[index + 1])
     namespace["main"]()
-    with (RUN_DIR / "clustering_analysis" / "SUMMARY.md").open(
-        "a", encoding="utf-8"
-    ) as handle:
+    with (effective_output_dir / "SUMMARY.md").open("a", encoding="utf-8") as handle:
         handle.write(
             "\n## Mouse Thymus plot adaptation\n\n"
             "- Clustering spot sizes: Mouse_Thymus1 = 8; "

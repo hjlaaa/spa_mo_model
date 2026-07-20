@@ -139,8 +139,8 @@ def _load_pipeline() -> dict:
     return namespace
 
 
-def _write_adapter_audit() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _write_adapter_audit(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     common_rna: set[str] | None = None
     for section in SECTIONS:
@@ -167,8 +167,8 @@ def _write_adapter_audit() -> None:
         finally:
             rna.file.close()
             adt.file.close()
-    pd.DataFrame(rows).to_csv(OUTPUT_DIR / "input_adaptation_audit.csv", index=False)
-    (OUTPUT_DIR / "input_adaptation.json").write_text(
+    pd.DataFrame(rows).to_csv(output_dir / "input_adaptation_audit.csv", index=False)
+    (output_dir / "input_adaptation.json").write_text(
         json.dumps(
             {
                 "sections": SECTIONS,
@@ -186,7 +186,6 @@ def _write_adapter_audit() -> None:
 
 
 def main() -> None:
-    _write_adapter_audit()
     namespace = _load_pipeline()
     sys.argv[1:1] = [
         "--data_dir", str(DATA_DIR),
@@ -227,6 +226,7 @@ def main() -> None:
         "--log_cuda_memory",
     ]
     args = namespace["parse_args"]()
+    _write_adapter_audit(Path(args.output_dir))
     namespace["run_misar_pipeline"](args)
 
 

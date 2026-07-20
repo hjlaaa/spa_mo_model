@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Callable, Mapping, Sequence
 
 import torch
@@ -15,9 +16,12 @@ from .linkage_construction import (
     update_uot_prior_from_embeddings,
 )
 from .loss import (
+    compute_pairwise_corrected_cosie_crossview_loss,
+    compute_pairwise_crossview_loss,
     compute_pairwise_cosie_crossview_loss,
 )
 from .model_component import (
+    ContrastiveProjectionHead,
     FusionMLP,
     ModalityDecoder,
     ModalityMLPEncoder,
@@ -142,12 +146,102 @@ def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
     return epoch > 0 and epoch % update_interval == 0
 
 
+def _resolve_common_contrastive_batch_size(
+    feature_dict: Mapping[str, Mapping[str, Any]],
+    section_order: Sequence[str],
+    max_batch_size: Any,
+) -> int:
+    """Choose one safe paired batch size shared by every section."""
+
+    if isinstance(max_batch_size, bool) or not isinstance(max_batch_size, int):
+        raise TypeError(
+            "contrastive.max_batch_size must be an integer >= 2; "
+            f"got {max_batch_size!r}."
+        )
+    if max_batch_size < 2:
+        raise ValueError(
+            "contrastive.max_batch_size must be >= 2 so InfoNCE has negatives."
+        )
+
+    section_sizes: list[int] = []
+    for section in section_order:
+        observed = [
+            value for value in feature_dict[section].values() if value is not None
+        ]
+        if not observed or not hasattr(observed[0], "shape") or len(observed[0].shape) != 2:
+            raise ValueError(
+                f"Cannot determine a 2D feature-row count for section {section!r}."
+            )
+        section_sizes.append(int(observed[0].shape[0]))
+
+    if not section_sizes:
+        raise ValueError("At least one section is required for contrastive learning.")
+    batch_size = min(int(max_batch_size), min(section_sizes))
+    if batch_size < 2:
+        raise ValueError(
+            "Every section needs at least two aligned spots for cross-view InfoNCE; "
+            f"smallest section has {min(section_sizes)} spot(s)."
+        )
+    return batch_size
+
+
+def _select_paired_contrastive_indices(
+    n_spots: int,
+    batch_size: int,
+    device: torch.device,
+    training: bool,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Select unique row indices once for all modalities in one section."""
+
+    if batch_size > n_spots:
+        raise ValueError(
+            f"contrastive batch size {batch_size} exceeds section size {n_spots}."
+        )
+    if batch_size == n_spots:
+        return torch.arange(n_spots, device=device)
+    if training:
+        return torch.randperm(
+            n_spots,
+            device=device,
+            generator=generator,
+        )[:batch_size]
+    # Evaluation is deterministic and covers the full row range rather than a
+    # potentially spatially ordered prefix.
+    return torch.linspace(
+        0,
+        n_spots - 1,
+        steps=batch_size,
+        device=device,
+    ).round().long()
+
+
+def _make_contrastive_generator(
+    device: torch.device,
+    sampling_seed: int,
+    epoch: int,
+    section: str,
+) -> torch.Generator:
+    """Build a stable per-epoch/section RNG without using Python ``hash``."""
+
+    seed_material = f"{int(sampling_seed)}|{int(epoch)}|{section}".encode("utf-8")
+    digest = hashlib.blake2b(seed_material, digest_size=8).digest()
+    derived_seed = int.from_bytes(digest, byteorder="little", signed=False) % (
+        2**63 - 1
+    )
+    return torch.Generator(device=device).manual_seed(derived_seed)
+
+
 class StageMultiModalModel(nn.Module):
-    """V2 stage model built on the V1 COSIE-style multimodal backbone.
+    """V2 stage model built on the V1 multimodal backbone.
 
     V1 is preserved:
     ``feature_dict/spatial_loc_dict -> modality MLP encoders -> 128-d latents
-    -> COSIE cross-view loss -> FusionMLP -> 128-d fused embeddings``.
+    -> cross-view alignment -> FusionMLP -> 128-d fused embeddings``.
+
+    For symmetric InfoNCE/VICReg, modality-specific projection heads branch
+    from sampled encoder latents only for the alignment loss. Fusion and every
+    downstream component continue to consume the original encoder latents.
 
     V2 appends weighted residual GraphSAGE, adjacent-stage UOT-guided
     attention, and modality decoders. UOT is cached as a prior and does not
@@ -176,6 +270,71 @@ class StageMultiModalModel(nn.Module):
         self.decoders = nn.ModuleDict()
         self.ot_prior: dict[tuple[str, str], dict[str, Any]] | None = None
         self._spatial_graph_cache: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor]] = {}
+
+        contrastive_cfg = self.config["contrastive"]
+        contrastive_method = str(contrastive_cfg["method"])
+        new_contrastive_methods = {
+            "symmetric_infonce",
+            "symmetric_infonce_vicreg",
+        }
+        legacy_contrastive_methods = {
+            "legacy_cosie_dimension",
+            "cosie_crossview",
+        }
+        corrected_contrastive_methods = {"corrected_cosie_dimension"}
+        if contrastive_method not in (
+            new_contrastive_methods
+            | legacy_contrastive_methods
+            | corrected_contrastive_methods
+        ):
+            raise ValueError(
+                f"Unsupported contrastive method {contrastive_method!r}; expected one of "
+                f"{sorted(new_contrastive_methods | legacy_contrastive_methods | corrected_contrastive_methods)}."
+            )
+
+        self.contrastive_projection_heads = nn.ModuleDict()
+        if contrastive_method in new_contrastive_methods:
+            # Projection heads exist only on the new loss branch.  Initializing
+            # them from the global generator would advance its state before the
+            # shared fusion/graph/attention/encoder modules are constructed, so
+            # a legacy/new pair with the same training seed would start from
+            # different shared weights.  Derive a deterministic private seed
+            # from the current CPU RNG state, then restore that state when head
+            # construction finishes.  Projection parameters remain
+            # reproducible without perturbing any shared-module initialization.
+            rng_state = torch.random.get_rng_state()
+            seed_material = (
+                rng_state.cpu().numpy().tobytes()
+                + b"|spa_mo_contrastive_projection_heads_v1"
+            )
+            projection_seed = int.from_bytes(
+                hashlib.blake2b(seed_material, digest_size=8).digest(),
+                byteorder="little",
+                signed=False,
+            ) % (2**63 - 1)
+            self.contrastive_projection_initialization_seed = projection_seed
+            with torch.random.fork_rng(devices=[]):
+                # Set only the CPU generator used by module constructors.
+                # torch.manual_seed() also touches CUDA generators, which are
+                # intentionally outside this CPU-only fork context.
+                private_generator = torch.Generator(device="cpu")
+                private_generator.manual_seed(projection_seed)
+                torch.random.set_rng_state(private_generator.get_state())
+                for modality in self.canonical_modality_order:
+                    self.contrastive_projection_heads[modality] = (
+                        ContrastiveProjectionHead(
+                            input_dim=self.latent_dim,
+                            hidden_dim=int(contrastive_cfg["projection_hidden_dim"]),
+                            output_dim=int(contrastive_cfg["projection_dim"]),
+                            activation=str(
+                                contrastive_cfg.get("projection_activation", "GELU")
+                            ),
+                            norm=contrastive_cfg.get("projection_norm", "LayerNorm"),
+                            dropout=float(
+                                contrastive_cfg.get("projection_dropout", 0.0)
+                            ),
+                        )
+                    )
 
         self.fusion_modules = nn.ModuleDict()
         for modality_order in self.valid_modality_sets:
@@ -727,7 +886,30 @@ class StageMultiModalModel(nn.Module):
 
         graph_cfg = self.config["graph"]
         graph_sage_cfg = self.config["graphsage"]
-        contrastive_gamma = float(self.config["contrastive"]["gamma"])
+        contrastive_cfg = self.config["contrastive"]
+        contrastive_method = str(contrastive_cfg["method"])
+        new_contrastive_methods = {
+            "symmetric_infonce",
+            "symmetric_infonce_vicreg",
+        }
+        legacy_contrastive_methods = {
+            "legacy_cosie_dimension",
+            "cosie_crossview",
+        }
+        corrected_contrastive_methods = {"corrected_cosie_dimension"}
+        if str(contrastive_cfg.get("section_reduction", "mean")) != "mean":
+            raise ValueError("Only contrastive.section_reduction='mean' is supported.")
+        contrastive_batch_size: int | None = None
+        if contrastive_method in new_contrastive_methods:
+            contrastive_batch_size = _resolve_common_contrastive_batch_size(
+                feature_dict=feature_dict,
+                section_order=resolved_order,
+                max_batch_size=contrastive_cfg.get("max_batch_size", 2048),
+            )
+        elif contrastive_method not in (
+            legacy_contrastive_methods | corrected_contrastive_methods
+        ):
+            raise ValueError(f"Unsupported contrastive method {contrastive_method!r}.")
         lambda_contrast = float(self.config["loss"]["lambda_contrast"])
         lambda_reconstruction = float(self.config["loss"]["lambda_reconstruction"])
         lambda_by_modality = self.config["reconstruction"]["lambda_by_modality"]
@@ -753,9 +935,33 @@ class StageMultiModalModel(nn.Module):
         crossview_details: dict[str, dict[str, torch.Tensor]] = {}
         reconstruction_details: dict[str, dict[str, torch.Tensor]] = {}
         messages: list[str] = [
-            "processed_data_dict is accepted for pipeline compatibility but is not used by Model Stage V2."
+            "processed_data_dict is accepted for pipeline compatibility but is not used by Model Stage V2.",
+            f"Cross-view method: {contrastive_method}.",
         ]
-        crossview_loss = torch.zeros((), device=device)
+        if contrastive_method == "cosie_crossview":
+            messages.append(
+                "contrastive.method='cosie_crossview' is a deprecated alias for "
+                "'legacy_cosie_dimension'."
+            )
+        if contrastive_batch_size is not None:
+            messages.append(
+                "Symmetric InfoNCE uses one shared paired sample per section "
+                f"with batch size {contrastive_batch_size}."
+            )
+        crossview_section_losses: list[torch.Tensor] = []
+        crossview_component_sections: dict[str, list[torch.Tensor]] = {
+            "infonce": [],
+            "variance": [],
+            "covariance": [],
+        }
+        crossview_metric_sections: dict[str, list[torch.Tensor]] = {
+            "crossmodal_top1_accuracy": [],
+            "projection_std_min": [],
+            "projection_std_median": [],
+            "corrected_joint_min": [],
+            "corrected_joint_max": [],
+            "corrected_joint_sum": [],
+        }
         reconstruction_loss = torch.zeros((), device=device)
         expected_modality_order: tuple[str, ...] | None = None
         _record_forward_memory(
@@ -872,15 +1078,102 @@ class StageMultiModalModel(nn.Module):
                     },
                 )
 
-            section_crossview_loss, section_loss_details = compute_pairwise_cosie_crossview_loss(
-                section_latents,
-                gamma=contrastive_gamma,
-            )
-            crossview_loss = crossview_loss + section_crossview_loss
+            if contrastive_method in new_contrastive_methods:
+                if n_spots is None or contrastive_batch_size is None:
+                    raise RuntimeError("Failed to resolve a contrastive spot batch.")
+                contrastive_generator = None
+                if self.training and epoch is not None:
+                    sampling_seed = contrastive_cfg.get("sampling_seed", 0)
+                    if isinstance(sampling_seed, bool) or not isinstance(
+                        sampling_seed, int
+                    ):
+                        raise TypeError(
+                            "contrastive.sampling_seed must be an integer; "
+                            f"got {sampling_seed!r}."
+                        )
+                    contrastive_generator = _make_contrastive_generator(
+                        device=device,
+                        sampling_seed=sampling_seed,
+                        epoch=int(epoch),
+                        section=section,
+                    )
+                paired_indices = _select_paired_contrastive_indices(
+                    n_spots=n_spots,
+                    batch_size=contrastive_batch_size,
+                    device=device,
+                    training=self.training,
+                    generator=contrastive_generator,
+                )
+                projected_latents: dict[str, torch.Tensor] = {}
+                for modality in modality_order:
+                    if modality not in self.contrastive_projection_heads:
+                        raise KeyError(
+                            f"No contrastive projection head initialized for {modality}."
+                        )
+                    # Sample before projection: CRC therefore stores projection
+                    # activations for B spots, never for all spots in a section.
+                    sampled_latent = section_latents[modality].index_select(
+                        0, paired_indices
+                    )
+                    projected_latents[modality] = self.contrastive_projection_heads[
+                        modality
+                    ](sampled_latent)
+
+                section_crossview_loss, section_loss_details = (
+                    compute_pairwise_crossview_loss(
+                        projected_latents=projected_latents,
+                        config=contrastive_cfg,
+                    )
+                )
+                for component_name in crossview_component_sections:
+                    crossview_component_sections[component_name].append(
+                        section_loss_details[component_name]
+                    )
+                for metric_name in (
+                    "crossmodal_top1_accuracy",
+                    "projection_std_min",
+                    "projection_std_median",
+                ):
+                    crossview_metric_sections[metric_name].append(
+                        section_loss_details[metric_name]
+                    )
+            elif contrastive_method in corrected_contrastive_methods:
+                section_crossview_loss, section_loss_details = (
+                    compute_pairwise_corrected_cosie_crossview_loss(
+                        section_latents,
+                        gamma=float(contrastive_cfg.get("gamma", 5.0)),
+                        temperature=float(contrastive_cfg.get("temperature", 0.2)),
+                        eps=float(contrastive_cfg.get("corrected_cosie_eps", 1e-8)),
+                    )
+                )
+                for metric_name in (
+                    "corrected_joint_min",
+                    "corrected_joint_max",
+                    "corrected_joint_sum",
+                ):
+                    crossview_metric_sections[metric_name].append(
+                        section_loss_details[metric_name]
+                    )
+            else:
+                section_crossview_loss, section_loss_details = (
+                    compute_pairwise_cosie_crossview_loss(
+                        section_latents,
+                        gamma=float(contrastive_cfg.get("gamma", 5.0)),
+                    )
+                )
+
+            crossview_section_losses.append(section_crossview_loss)
             _record_forward_memory(
                 memory_recorder,
                 f"section_{section}_crossview_end",
-                {"section": section, "modalities": list(modality_order)},
+                {
+                    "section": section,
+                    "modalities": list(modality_order),
+                    "method": contrastive_method,
+                    "sampled_spots": int(
+                        contrastive_batch_size if contrastive_batch_size is not None else n_spots
+                    ),
+                },
             )
             if keep_full_outputs:
                 crossview_details[section] = section_loss_details
@@ -943,6 +1236,60 @@ class StageMultiModalModel(nn.Module):
                         use_graph_encoder_checkpoint and graph_sage_cfg["enabled"]
                     ),
                 },
+            )
+
+        if not crossview_section_losses:
+            raise RuntimeError("No section-level cross-view loss was computed.")
+        stacked_crossview_losses = torch.stack(crossview_section_losses)
+        if contrastive_method in new_contrastive_methods | corrected_contrastive_methods:
+            # Pairwise losses are already means within each section. A section
+            # mean keeps corrected/new cross-view scales stable across datasets.
+            crossview_loss = stacked_crossview_losses.mean()
+        else:
+            legacy_section_reduction = str(
+                contrastive_cfg.get("legacy_section_reduction", "sum")
+            )
+            if legacy_section_reduction != "sum":
+                raise ValueError(
+                    "The exact legacy baseline requires "
+                    "contrastive.legacy_section_reduction='sum'."
+                )
+            # Preserve the pre-v2 behavior exactly for strict L0 comparison:
+            # legacy pair losses and section losses were both summed.
+            crossview_loss = stacked_crossview_losses.sum()
+        contrastive_component_losses: dict[str, torch.Tensor] = {}
+        for component_name, section_values in crossview_component_sections.items():
+            if section_values:
+                contrastive_component_losses[component_name] = torch.stack(
+                    section_values
+                ).mean()
+
+        contrastive_metrics: dict[str, torch.Tensor] = {}
+        for metric_name, section_values in crossview_metric_sections.items():
+            if not section_values:
+                continue
+            stacked_values = torch.stack(section_values)
+            if metric_name in {"projection_std_min", "corrected_joint_min"}:
+                contrastive_metrics[metric_name] = stacked_values.min().detach()
+            elif metric_name == "corrected_joint_max":
+                contrastive_metrics[metric_name] = stacked_values.max().detach()
+            else:
+                contrastive_metrics[metric_name] = stacked_values.mean().detach()
+        if contrastive_batch_size is not None:
+            contrastive_metrics.update(
+                {
+                    "contrastive_batch_size": torch.tensor(
+                        contrastive_batch_size, device=device, dtype=torch.long
+                    ),
+                    "contrastive_num_negatives": torch.tensor(
+                        contrastive_batch_size - 1, device=device, dtype=torch.long
+                    ),
+                    "contrastive_temperature": torch.tensor(
+                        float(contrastive_cfg.get("temperature", 0.2)),
+                        device=device,
+                        dtype=torch.float32,
+                    ),
+                }
             )
 
         if self.config["uot"]["enabled"] and self.config["ot_attention"]["enabled"]:
@@ -1061,7 +1408,21 @@ class StageMultiModalModel(nn.Module):
                     reconstruction_details[section] = section_rec_details
                     reconstructions[section] = section_recon
 
-        total_loss = lambda_reconstruction * reconstruction_loss + lambda_contrast * crossview_loss
+        weighted_crossview_loss = lambda_contrast * crossview_loss
+        total_loss = lambda_reconstruction * reconstruction_loss + weighted_crossview_loss
+        loss_tensors: dict[str, torch.Tensor] = {
+            "total_loss": total_loss,
+            "crossview_loss": crossview_loss,
+            "weighted_crossview_loss": weighted_crossview_loss,
+            "reconstruction_loss": reconstruction_loss,
+        }
+        component_output_names = {
+            "infonce": "contrastive_infonce_loss",
+            "variance": "contrastive_variance_loss",
+            "covariance": "contrastive_covariance_loss",
+        }
+        for component_name, component_loss in contrastive_component_losses.items():
+            loss_tensors[component_output_names[component_name]] = component_loss
         _record_forward_memory(
             memory_recorder,
             "end",
@@ -1074,14 +1435,15 @@ class StageMultiModalModel(nn.Module):
         if training_loss_only:
             return {
                 "losses": {
-                    "total_loss": total_loss.float(),
-                    "crossview_loss": crossview_loss.float(),
-                    "reconstruction_loss": reconstruction_loss.float(),
+                    name: value.float() for name, value in loss_tensors.items()
                 },
                 "loss_scalars": {
-                    "total_loss": float(total_loss.detach().cpu().item()),
-                    "crossview_loss": float(crossview_loss.detach().cpu().item()),
-                    "reconstruction_loss": float(reconstruction_loss.detach().cpu().item()),
+                    name: float(value.detach().cpu().item())
+                    for name, value in loss_tensors.items()
+                },
+                "contrastive_metrics": {
+                    name: float(value.detach().cpu().item())
+                    for name, value in contrastive_metrics.items()
                 },
                 "messages": messages,
             }
@@ -1094,14 +1456,11 @@ class StageMultiModalModel(nn.Module):
             "reconstructions": reconstructions,
             "spatial_graph_dict": spatial_graph_dict,
             "ot_prior": self.ot_prior,
-            "losses": {
-                "total_loss": total_loss,
-                "crossview_loss": crossview_loss,
-                "reconstruction_loss": reconstruction_loss,
-            },
+            "losses": loss_tensors,
             "loss_details": {
                 "crossview": crossview_details,
                 "reconstruction": reconstruction_details,
             },
+            "contrastive_metrics": contrastive_metrics,
             "messages": messages,
         }

@@ -55,6 +55,12 @@ def parse_args():
     parser.add_argument("--n_clusters", default="8,10,12,14")
     parser.add_argument("--label_keys", default=",".join(DEFAULT_LABEL_KEYS))
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--metric_seed",
+        type=int,
+        default=0,
+        help="Fixed subsampling seed for embedding metrics; independent of KMeans seed.",
+    )
     parser.add_argument("--dpi", type=int, default=220)
     parser.add_argument(
         "--point_size",
@@ -384,7 +390,14 @@ def run_joint(
     files = []
     metrics_rows = []
     cluster_metrics = safe_embedding_cluster_metrics(stacked, labels_all, args.metric_sample_size, args.seed)
-    for row in supervised_metrics(stacked, labels_all, label_table, label_keys, args.metric_sample_size, args.seed):
+    for row in supervised_metrics(
+        stacked,
+        labels_all,
+        label_table,
+        label_keys,
+        args.metric_sample_size,
+        args.metric_seed,
+    ):
         metrics_rows.append({"mode": "joint", "n_clusters": n_clusters, **cluster_metrics, **row})
     section_truth = label_table["section"].astype(str).to_numpy()
     section_idx = sampled_indices(
@@ -494,7 +507,14 @@ def run_independent(
         )
         files.append(str(png_path))
         cluster_metrics = safe_embedding_cluster_metrics(embedding, labels, args.metric_sample_size, args.seed)
-        for row in supervised_metrics(embedding, labels, obs_meta[section], label_keys, args.metric_sample_size, args.seed):
+        for row in supervised_metrics(
+            embedding,
+            labels,
+            obs_meta[section],
+            label_keys,
+            args.metric_sample_size,
+            args.metric_seed,
+        ):
             metrics_rows.append({"mode": "independent", "section": section, "n_clusters": n_clusters, **cluster_metrics, **row})
         metrics_rows.append(
             {
@@ -585,7 +605,7 @@ def main() -> None:
         analysis_dir=output_dir,
         clustering_dir=output_dir,
         sections=section_order,
-        seed=int(args.seed),
+        seed=int(args.metric_seed),
         metric_sample_size=int(args.metric_sample_size),
         spatial_neighbor_k=int(args.spatial_neighbor_k),
     )

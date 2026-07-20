@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from model.multimodal_preprocessing import (
 )
 from model.stage_model import StageMultiModalModel, should_update_ot
 from model.utils import ensure_dir
+from run_crc_stereocite import add_contrastive_args, apply_contrastive_overrides
 
 
 def parse_args():
@@ -37,6 +39,8 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=None, help="Override training epochs.")
     parser.add_argument("--max_spots_per_section", type=int, default=None, help="Use the first N spots per section.")
     parser.add_argument("--lambda_contrast", type=float, default=None, help="Override loss.lambda_contrast.")
+    parser.add_argument("--seed", type=int, default=42)
+    add_contrastive_args(parser)
     parser.add_argument(
         "--lambda_contrast_schedule",
         default=None,
@@ -339,14 +343,28 @@ def save_run_artifacts(
     summary: Mapping[str, Any],
     history: list[dict[str, float]] | None,
     final_embeddings: Mapping[str, torch.Tensor],
+    spatial_loc_dict: Mapping[str, Any],
 ):
     ensure_dir(output_dir)
     config_copy = output_dir / "mousebrain_config_used.json"
     shutil.copyfile(config_path, config_copy)
     embedding_paths = save_embeddings(output_dir, final_embeddings)
+    spatial_paths = {}
+    for section, coordinates in spatial_loc_dict.items():
+        path = output_dir / f"spatial_{section}.npy"
+        if isinstance(coordinates, torch.Tensor):
+            values = coordinates.detach().cpu().numpy()
+        else:
+            values = np.asarray(coordinates)
+        np.save(path, values)
+        spatial_paths[section] = str(path)
     full_summary = dict(summary)
     full_summary["config_copy"] = str(config_copy)
     full_summary["final_embedding_paths"] = embedding_paths
+    full_summary["saved_files"] = {
+        "final_embeddings": embedding_paths,
+        "spatial": spatial_paths,
+    }
     with open(output_dir / "run_summary.json", "w", encoding="utf-8") as handle:
         json.dump(json_safe(full_summary), handle, indent=2, ensure_ascii=False)
     if history is not None:
@@ -357,6 +375,12 @@ def save_run_artifacts(
 def run_mousebrain(args):
     if args.lambda_contrast is not None and args.lambda_contrast_schedule is not None:
         raise ValueError("Use either --lambda_contrast or --lambda_contrast_schedule, not both.")
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     config_path = Path(args.config)
     config = load_json(config_path)
@@ -388,6 +412,7 @@ def run_mousebrain(args):
         lambda_contrast=args.lambda_contrast,
         device=args.device,
     )
+    apply_contrastive_overrides(model_config, args)
     lambda_schedule = parse_lambda_contrast_schedule(args.lambda_contrast_schedule)
     epochs = int(model_config["training"]["epochs"])
 
@@ -411,6 +436,8 @@ def run_mousebrain(args):
         "hvg_num_by_modality": config.get("preprocessing", {}).get("hvg_num_by_modality"),
         "lambda_contrast": model_config["loss"]["lambda_contrast"],
         "lambda_contrast_schedule": args.lambda_contrast_schedule,
+        "seed": int(args.seed),
+        "resolved_model_config": model_config,
         "device": model_config["training"]["device"],
         "data_dict": summarize_data_dict(prep["data_dict"]),
         "feature_dict": summarize_feature_dict(feature_dict),
@@ -448,6 +475,7 @@ def run_mousebrain(args):
             summary=summary,
             history=None,
             final_embeddings=dry_outputs["final_embeddings"],
+            spatial_loc_dict=spatial_loc_dict,
         )
         print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
         print("MOUSEBRAIN_DRY_RUN: PASS")
@@ -490,6 +518,11 @@ def run_mousebrain(args):
             "reconstruction_loss": float(outputs["losses"]["reconstruction_loss"].detach().cpu()),
         }
         record["weighted_crossview_loss"] = record["lambda_contrast"] * record["crossview_loss"]
+        for key, value in outputs["losses"].items():
+            if key not in record:
+                record[key] = float(value.detach().float().cpu().item())
+        for key, value in outputs.get("contrastive_metrics", {}).items():
+            record[key] = float(value.detach().cpu().item())
         history.append(record)
         print(
             f"epoch={epoch} total={record['total_loss']:.6f} "
@@ -558,6 +591,7 @@ def run_mousebrain(args):
         summary=summary,
         history=history,
         final_embeddings=final_outputs["final_embeddings"],
+        spatial_loc_dict=spatial_loc_dict,
     )
     print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
     print("MOUSEBRAIN_TRAINING: PASS")

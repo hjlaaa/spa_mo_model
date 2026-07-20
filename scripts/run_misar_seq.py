@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import random
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,8 @@ from model.data_preprocessing import load_cosie_style_data
 from model.stage_model import StageMultiModalModel
 from run_crc_stereocite import (
     CudaMemoryMonitor,
+    add_contrastive_args,
+    apply_contrastive_overrides,
     amp_enabled,
     ensure_dir,
     initialize_model_ot_prior,
@@ -73,6 +76,8 @@ def parse_args():
     parser.add_argument("--train", action="store_true")
     parser.add_argument("--epochs", type=int, default=0)
     parser.add_argument("--lambda_contrast", type=float, default=None)
+    parser.add_argument("--lambda_contrast_schedule", default=None)
+    add_contrastive_args(parser)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--update_interval", type=int, default=20)
@@ -351,6 +356,7 @@ def make_model_config(args) -> dict[str, Any]:
     config["decoder"]["dropout"] = float(args.decoder_dropout)
     if args.lambda_contrast is not None:
         config["loss"]["lambda_contrast"] = float(args.lambda_contrast)
+    apply_contrastive_overrides(config, args)
     config["uot"]["max_iter"] = int(args.uot_max_iter)
     config["uot"]["topk"] = int(args.attention_topk)
     config["uot"]["epsilon_update"] = float(args.uot_epsilon)
@@ -401,8 +407,11 @@ def validate_args(args) -> None:
 
 def run_misar_pipeline(args) -> dict[str, Any]:
     validate_args(args)
+    random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     rng = np.random.default_rng(args.seed)
 
     data_dir = Path(args.data_dir)
@@ -634,6 +643,8 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             "train": bool(args.train),
             "epochs": int(args.epochs) if args.train else 0,
             "lambda_contrast": float(model_config["loss"]["lambda_contrast"]),
+            "lambda_contrast_schedule": args.lambda_contrast_schedule,
+            "resolved_model_config": model_config,
             "lr": float(args.lr),
             "weight_decay": float(args.weight_decay),
             "update_interval": int(args.update_interval),

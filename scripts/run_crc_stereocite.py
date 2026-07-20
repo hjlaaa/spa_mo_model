@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import random
 import re
 import sys
 import time
@@ -42,6 +43,90 @@ AUTO_SECTION_KEY_MAP = {
     "s2": "CRC_006",
 }
 SUFFIX_RE = re.compile(r".+-[0-9]+$")
+
+
+CONTRASTIVE_METHODS = (
+    "legacy_cosie_dimension",
+    "corrected_cosie_dimension",
+    "symmetric_infonce",
+    "symmetric_infonce_vicreg",
+)
+
+
+def add_contrastive_args(parser: argparse.ArgumentParser) -> None:
+    """Add shared, explicit cross-view experiment controls."""
+
+    parser.add_argument("--contrastive_method", choices=CONTRASTIVE_METHODS, default=None)
+    parser.add_argument("--projection_dim", type=int, default=None)
+    parser.add_argument("--projection_hidden_dim", type=int, default=None)
+    parser.add_argument("--contrastive_temperature", type=float, default=None)
+    parser.add_argument("--lambda_var", type=float, default=None)
+    parser.add_argument("--lambda_cov", type=float, default=None)
+    parser.add_argument("--max_contrastive_batch_size", type=int, default=None)
+    parser.add_argument("--contrastive_sampling_seed", type=int, default=None)
+
+
+def apply_contrastive_overrides(config: dict[str, Any], args) -> None:
+    """Apply only explicitly requested loss overrides to a resolved config."""
+
+    contrastive = config["contrastive"]
+    mapping = {
+        "contrastive_method": "method",
+        "projection_dim": "projection_dim",
+        "projection_hidden_dim": "projection_hidden_dim",
+        "contrastive_temperature": "temperature",
+        "lambda_var": "lambda_var",
+        "lambda_cov": "lambda_cov",
+        "max_contrastive_batch_size": "max_batch_size",
+    }
+    for argument_name, config_name in mapping.items():
+        value = getattr(args, argument_name, None)
+        if value is not None:
+            contrastive[config_name] = value
+    requested_sampling_seed = getattr(args, "contrastive_sampling_seed", None)
+    contrastive["sampling_seed"] = int(
+        args.seed if requested_sampling_seed is None else requested_sampling_seed
+    )
+
+
+def parse_lambda_contrast_schedule(
+    schedule_text: str | None,
+) -> list[tuple[int, int, float]] | None:
+    if not schedule_text:
+        return None
+    schedule: list[tuple[int, int, float]] = []
+    for chunk in schedule_text.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            epoch_range, value_text = chunk.split(":", 1)
+            start_text, end_text = epoch_range.split("-", 1)
+            start_epoch = int(start_text)
+            end_epoch = int(end_text)
+            value = float(value_text)
+        except ValueError as exc:
+            raise ValueError(
+                "Invalid --lambda_contrast_schedule entry; expected e.g. "
+                "'1-5:1e-3,6-200:1e-1'."
+            ) from exc
+        if start_epoch <= 0 or end_epoch < start_epoch or value < 0:
+            raise ValueError(f"Invalid lambda schedule entry: {chunk!r}.")
+        schedule.append((start_epoch, end_epoch, value))
+    if not schedule:
+        raise ValueError("--lambda_contrast_schedule did not contain any entries.")
+    return schedule
+
+
+def lambda_for_epoch(
+    epoch: int,
+    schedule: list[tuple[int, int, float]] | None,
+    default_lambda: float,
+) -> float:
+    for start_epoch, end_epoch, value in schedule or []:
+        if start_epoch <= epoch <= end_epoch:
+            return float(value)
+    return float(default_lambda)
 
 
 def parse_args():
@@ -76,6 +161,8 @@ def parse_args():
     parser.add_argument("--train", action="store_true", help="Run a small training loop after preprocessing.")
     parser.add_argument("--epochs", type=int, default=0, help="Number of training epochs when --train is set.")
     parser.add_argument("--lambda_contrast", type=float, default=None)
+    parser.add_argument("--lambda_contrast_schedule", default=None)
+    add_contrastive_args(parser)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--update_interval", type=int, default=20)
@@ -748,9 +835,18 @@ def train_small_crc_model(
     scaler = make_grad_scaler(args)
     history: list[dict[str, float]] = []
     ot_updates: list[int] = []
+    base_lambda_contrast = float(model.config["loss"]["lambda_contrast"])
+    lambda_schedule = parse_lambda_contrast_schedule(
+        getattr(args, "lambda_contrast_schedule", None)
+    )
     for epoch in range(1, epochs + 1):
         start_time = time.time()
         model.train()
+        model.config["loss"]["lambda_contrast"] = lambda_for_epoch(
+            epoch,
+            lambda_schedule,
+            base_lambda_contrast,
+        )
         if memory_monitor is not None:
             memory_monitor.record("epoch_start", epoch=epoch)
             memory_monitor.reset_peak()
@@ -825,6 +921,11 @@ def train_small_crc_model(
             "elapsed_time_sec": float(time.time() - start_time),
         }
         record["weighted_crossview_loss"] = record["lambda_contrast"] * record["crossview_loss"]
+        for key, value in outputs["losses"].items():
+            if key not in record:
+                record[key] = float(value.detach().float().cpu().item())
+        for key, value in outputs.get("contrastive_metrics", {}).items():
+            record[key] = float(value)
         if memory_monitor is not None:
             stage_events = [forward_memory, backward_memory, optimizer_memory]
             record.update(
@@ -912,6 +1013,11 @@ def train_small_crc_model(
             print(f"Updated OT prior at epoch {epoch}.")
 
     model.eval()
+    model.config["loss"]["lambda_contrast"] = lambda_for_epoch(
+        epochs,
+        lambda_schedule,
+        base_lambda_contrast,
+    )
     with torch.no_grad():
         if memory_monitor is not None:
             memory_monitor.reset_peak()
@@ -972,8 +1078,11 @@ def run_crc_pipeline(args) -> dict[str, Any]:
     if args.log_cuda_memory_detail:
         args.log_cuda_memory = True
 
+    random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     rng = np.random.default_rng(args.seed)
 
     data_dir = Path(args.data_dir)
@@ -1137,6 +1246,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         model_config["training"]["weight_decay"] = float(args.weight_decay)
         if args.lambda_contrast is not None:
             model_config["loss"]["lambda_contrast"] = float(args.lambda_contrast)
+        apply_contrastive_overrides(model_config, args)
         model_config["uot"]["max_iter"] = int(args.uot_max_iter)
         model_config["uot"]["topk"] = int(args.attention_topk)
         model_config["uot"]["epsilon_update"] = float(args.uot_epsilon)
@@ -1292,6 +1402,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "train": bool(args.train),
             "epochs": int(args.epochs) if args.train else 0,
             "lambda_contrast": float(model_config["loss"]["lambda_contrast"]),
+            "lambda_contrast_schedule": args.lambda_contrast_schedule,
+            "resolved_model_config": model_config,
             "lr": float(args.lr),
             "weight_decay": float(args.weight_decay),
             "update_interval": int(args.update_interval),

@@ -39,6 +39,12 @@ def parse_args():
     )
     parser.add_argument("--n_clusters", default="5,8,10,15", help="Comma-separated KMeans cluster counts.")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--metric_seed",
+        type=int,
+        default=0,
+        help="Fixed subsampling seed for embedding metrics; independent of KMeans seed.",
+    )
     parser.add_argument("--dpi", type=int, default=220)
     parser.add_argument("--point_size", type=float, default=0.6)
     parser.add_argument(
@@ -516,7 +522,7 @@ def main() -> None:
         analysis_dir=output_dir,
         clustering_dir=output_dir,
         sections=SECTION_ORDER,
-        seed=int(args.seed),
+        seed=int(args.metric_seed),
         metric_sample_size=10000,
         spatial_neighbor_k=6,
     )

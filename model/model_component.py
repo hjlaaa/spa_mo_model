@@ -73,6 +73,51 @@ class ModalityMLPEncoder(nn.Module):
         return z
 
 
+class ContrastiveProjectionHead(nn.Module):
+    """Map an encoder latent into the loss-only contrastive space.
+
+    The returned projection is intentionally not L2-normalized: InfoNCE
+    normalizes its private copy, while VICReg needs the raw projection scale to
+    measure variance and covariance. Encoder latents remain the inputs to
+    fusion and all downstream model components.
+    """
+
+    def __init__(
+        self,
+        input_dim: int = 128,
+        hidden_dim: int = 128,
+        output_dim: int = 64,
+        activation: str = "GELU",
+        norm: str | None = "LayerNorm",
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.output_dim = int(output_dim)
+        if self.input_dim < 1 or int(hidden_dim) < 1 or self.output_dim < 1:
+            raise ValueError("Projection-head dimensions must all be positive.")
+        if not 0.0 <= float(dropout) < 1.0:
+            raise ValueError(f"Projection-head dropout must be in [0, 1), got {dropout}.")
+
+        layers: list[nn.Module] = [nn.Linear(self.input_dim, int(hidden_dim))]
+        norm_layer = _build_norm(norm, int(hidden_dim))
+        if norm_layer is not None:
+            layers.append(norm_layer)
+        layers.append(_build_activation(activation))
+        if dropout > 0:
+            layers.append(nn.Dropout(float(dropout)))
+        layers.append(nn.Linear(int(hidden_dim), self.output_dim))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        if latent.ndim != 2 or latent.shape[1] != self.input_dim:
+            raise ValueError(
+                f"Projection head expected shape [N, {self.input_dim}], "
+                f"got {tuple(latent.shape)}."
+            )
+        return self.network(latent)
+
+
 class FusionMLP(nn.Module):
     """Fuse observed modality latents into one 128-dimensional spot embedding.
 

@@ -290,16 +290,31 @@ def complete_analysis(
     seed: int = 42,
     metric_sample_size: int = 10000,
     spatial_neighbor_k: int = 6,
+    spatial_coords_override: dict[str, np.ndarray] | None = None,
 ) -> dict[str, str]:
     run_summary = _load_json(run_dir / "run_summary.json")
     embeddings = {
         section: np.load(_embedding_path(run_dir, section, run_summary))
         for section in sections
     }
-    spatial_coords = {
-        section: np.load(_spatial_path(run_dir, section, run_summary))
-        for section in sections
-    }
+    if spatial_coords_override is None:
+        spatial_coords = {
+            section: np.load(_spatial_path(run_dir, section, run_summary))
+            for section in sections
+        }
+    else:
+        missing_spatial = [
+            section for section in sections if section not in spatial_coords_override
+        ]
+        if missing_spatial:
+            raise KeyError(
+                "spatial_coords_override is missing sections: "
+                f"{missing_spatial}."
+            )
+        spatial_coords = {
+            section: np.asarray(spatial_coords_override[section])
+            for section in sections
+        }
     for section, values in embeddings.items():
         if values.ndim != 2 or not np.isfinite(values).all():
             raise ValueError(f"{section}: embedding must be a finite 2D matrix")
