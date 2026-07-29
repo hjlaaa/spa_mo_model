@@ -1,0 +1,20 @@
+{
+  "simulation_factor_diagnostics.csv": {
+    "source": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/simulation_factor_diagnostics.csv",
+    "source_sha256": "340f10dc5778a6074c08f4b72d866b69d0c7abfe53058da0f27ba899a6b0dab3",
+    "copied_sha256": "340f10dc5778a6074c08f4b72d866b69d0c7abfe53058da0f27ba899a6b0dab3",
+    "preprocessing_dependency": "independent_of_kmeans_input"
+  },
+  "cross_section_spot_retrieval.csv": {
+    "source": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/cross_section_spot_retrieval.csv",
+    "source_sha256": "b72db7cd66d7f29decb7fa0d19159c32dcb92850c9361e0e1d5ba36b961d0b4f",
+    "copied_sha256": "b72db7cd66d7f29decb7fa0d19159c32dcb92850c9361e0e1d5ba36b961d0b4f",
+    "preprocessing_dependency": "independent_of_kmeans_input"
+  },
+  "batch_correction_metrics.csv": {
+    "source": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/batch_correction_metrics.csv",
+    "source_sha256": "1cfca640915db61ffd919d298000cd80ae012fae3611f75d8c98f1ac1ca6b12a",
+    "copied_sha256": "1cfca640915db61ffd919d298000cd80ae012fae3611f75d8c98f1ac1ca6b12a",
+    "preprocessing_dependency": "independent_of_kmeans_input"
+  }
+}

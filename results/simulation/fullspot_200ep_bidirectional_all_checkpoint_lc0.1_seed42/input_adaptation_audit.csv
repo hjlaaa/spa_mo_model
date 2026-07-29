@@ -1,0 +1,6 @@
+section,rna_shape,adt_shape,paired_spot_order,paired_spatial,matrix_source,background,sp1,sp2,sp3,sp4
+Simulation1,1296x1000,1296x100,True,True,X,432,180,288,216,180
+Simulation2,1296x1000,1296x100,True,True,X,432,180,288,216,180
+Simulation3,1296x1000,1296x100,True,True,X,432,180,288,216,180
+Simulation4,1296x1000,1296x100,True,True,X,432,180,288,216,180
+Simulation5,1296x1000,1296x100,True,True,X,432,180,288,216,180

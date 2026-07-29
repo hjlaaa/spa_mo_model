@@ -1,0 +1,11 @@
+{"time": 1784963877.6789985, "stage": "input_inspection_start", "rss_gib": 0.6737442016601562, "peak_rss_gib": 0.6737442016601562, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784963894.2894769, "stage": "input_inspection_end", "rss_gib": 0.9480857849121094, "peak_rss_gib": 1.494842529296875, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784963894.2901776, "stage": "RNA_load_start", "rss_gib": 0.9480857849121094, "peak_rss_gib": 1.494842529296875, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784963903.733467, "stage": "RNA_loaded", "rss_gib": 3.2154693603515625, "peak_rss_gib": 6.41058349609375, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784964734.1962574, "stage": "RNA_processed_and_released", "rss_gib": 1.3310317993164062, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784964734.1969557, "stage": "Protein_load_start", "rss_gib": 1.3310317993164062, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784964735.7305539, "stage": "Protein_loaded", "rss_gib": 1.4349327087402344, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784967427.0236757, "stage": "Protein_processed_and_released", "rss_gib": 1.4056243896484375, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784967427.024266, "stage": "HE_load_start", "rss_gib": 1.4056243896484375, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784967434.2364619, "stage": "HE_loaded", "rss_gib": 9.632904052734375, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}
+{"time": 1784968166.421376, "stage": "HE_processed_and_released", "rss_gib": 1.6536369323730469, "peak_rss_gib": 41.92336654663086, "cuda_allocated_gib": 0.0, "cuda_reserved_gib": 0.001953125}

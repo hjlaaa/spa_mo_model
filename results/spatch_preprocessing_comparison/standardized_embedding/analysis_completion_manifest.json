@@ -1,0 +1,8 @@
+{
+  "status": "complete",
+  "method": "spa_mo_model",
+  "scheme": "standardized_embedding",
+  "completed_at": "2026-07-26T14:44:28.336965+08:00",
+  "all_k_labels_archive": "/home/hujinlan/spa_mo_model/results/spatch_preprocessing_comparison/standardized_embedding/all_k_labels_and_fit_cache.zip",
+  "all_k_labels_archive_sha256": "c39d7e29ee737a40e46146b05ef207132ab37f1d168477eb8ca33386a51e9b66"
+}

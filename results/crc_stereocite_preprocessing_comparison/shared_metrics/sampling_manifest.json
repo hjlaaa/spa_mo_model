@@ -1,0 +1,29 @@
+{
+  "asw_sample": {
+    "path": "/home/hujinlan/spa_mo_model/results/crc_stereocite_preprocessing_comparison/shared_metrics/asw_sample.csv",
+    "sha256": "158d54ef95d70179ecddb951a6d97a8a59581c990b69ad1fab3034a3b4cef2e0",
+    "n_obs": 10000,
+    "section_counts": {
+      "CRC_003_bin20": 2716,
+      "CRC_006_bin20": 7284
+    },
+    "selection": "lowest SHA256('asw_seed0|' + barcode) per section"
+  },
+  "plot_sample": {
+    "path": "/home/hujinlan/spa_mo_model/results/crc_stereocite_preprocessing_comparison/shared_metrics/plot_sample.csv",
+    "sha256": "8d8f1f6f71c8488320f869df16cf9ca695b7d24aa864a221ce4a3ae7559b56c5",
+    "n_obs": 612374,
+    "section_counts": {
+      "CRC_003_bin20": 166279,
+      "CRC_006_bin20": 446095
+    },
+    "selection": "all spots in each section; rows stored in deterministic SHA256(barcode) order"
+  },
+  "identity_key": [
+    "section",
+    "obs_name"
+  ],
+  "shared_across_all_methods_preprocessing_modes_and_k": true,
+  "figures_use_all_spots": true,
+  "figures_redrawn_at": "2026-07-26T16:09:44.693669+08:00"
+}

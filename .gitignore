@@ -17,3 +17,4 @@ runs/
 *.npy
 *.npz
 UNI/
+result_v2_Contrastive_loss/

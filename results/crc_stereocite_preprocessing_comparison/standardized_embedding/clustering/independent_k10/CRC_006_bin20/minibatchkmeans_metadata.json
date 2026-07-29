@@ -1,0 +1,20 @@
+{
+  "class": "sklearn.cluster.MiniBatchKMeans",
+  "parameters": {
+    "n_clusters": 10,
+    "seed": 0,
+    "n_init": 20,
+    "max_iter": 300,
+    "batch_size": 8192,
+    "init": "k-means++",
+    "tol": 0.0,
+    "max_no_improvement": 10,
+    "init_size": null,
+    "reassignment_ratio": 0.01
+  },
+  "n_iter": 3,
+  "n_steps": 140,
+  "inertia": 47202348.0,
+  "labels_path": "/home/hujinlan/spa_mo_model/results/crc_stereocite_preprocessing_comparison/standardized_embedding/clustering/independent_k10/labels_CRC_006_bin20.csv",
+  "labels_sha256": "f03ff991104be4b69eba8778268a74dbca1fcf4b7ff2d05f878ddb73c4aee949"
+}

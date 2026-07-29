@@ -35,7 +35,15 @@ def main() -> None:
         "--input_dir", str(INPUT_DIR),
         "--output_dir", str(INPUT_DIR / "clustering_analysis"),
         "--n_clusters", "5,8,10,12",
-        "--seed", "42",
+        "--metric_n_clusters", "2,3,4,5,6,7,8,9,10,11,12",
+        "--seed", "0",
+        "--kmeans_method", "kmeans",
+        "--kmeans_input", "standardized",
+        "--n_init", "20",
+        "--max_iter", "300",
+        "--metric_sample_size", "0",
+        "--batch_metrics_max_samples", "0",
+        "--batch_asw_sample_size", "0",
         "--point_size", "10",
     ]
     namespace["main"]()

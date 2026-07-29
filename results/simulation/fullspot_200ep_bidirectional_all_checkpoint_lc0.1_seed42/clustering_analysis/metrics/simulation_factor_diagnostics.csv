@@ -1,0 +1,4 @@
+diagnostic,cv_linear_r2_variance_weighted,interpretation
+spfac_recovery,0.9833469439046137,higher_is_better
+rna_nsfac_leakage,0.9783648252487183,lower_is_better
+adt_nsfac_leakage,0.959199070930481,lower_is_better

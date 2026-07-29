@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.preprocessing import StandardScaler
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,12 @@ def parse_args():
         help="Output directory. Defaults to input_dir/clustering_analysis.",
     )
     parser.add_argument("--n_clusters", default="5,8,10,15", help="Comma-separated KMeans cluster counts.")
+    parser.add_argument(
+        "--metric_n_clusters",
+        default=None,
+        help="Optional comma-separated joint-clustering K values used for metrics. "
+        "These labels are saved but only --n_clusters values are plotted.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dpi", type=int, default=220)
     parser.add_argument("--point_size", type=float, default=0.6)
@@ -50,6 +57,18 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=8192, help="MiniBatchKMeans batch size.")
     parser.add_argument("--n_init", type=int, default=10, help="Number of KMeans initializations.")
     parser.add_argument("--max_iter", type=int, default=300, help="Maximum KMeans iterations.")
+    parser.add_argument(
+        "--kmeans_input",
+        choices=["raw", "standardized"],
+        default="raw",
+        help="Embedding space used to fit KMeans.",
+    )
+    parser.add_argument(
+        "--metric_sample_size",
+        type=int,
+        default=10000,
+        help="Maximum observations used for clustering metrics; <=0 uses all.",
+    )
     parser.add_argument(
         "--plot_max_points",
         type=int,
@@ -139,6 +158,7 @@ def load_inputs(input_dir: Path):
     embeddings = {}
     spatial = {}
     spot_indices = {}
+    obs_names = {}
     source_paths = {"run_summary": str(summary_path)}
     if loss_history_path.exists():
         source_paths["loss_history"] = str(loss_history_path)
@@ -158,15 +178,49 @@ def load_inputs(input_dir: Path):
             raise ValueError(
                 f"{section} embedding/spot index rows differ: {n_spots} vs {spot_indices[section].shape[0]}."
             )
+        data_root = Path(summary.get("input_data_path", ""))
+        rna_path = data_root / section / "adata_RNA.h5ad"
+        if rna_path.exists():
+            import anndata as ad
 
-    return embeddings, spatial, spot_indices, summary, loss_history, source_paths
+            rna = ad.read_h5ad(rna_path, backed="r")
+            try:
+                all_obs_names = np.asarray(rna.obs_names.astype(str))
+                obs_names[section] = all_obs_names[
+                    spot_indices[section].astype(np.int64, copy=False)
+                ]
+            finally:
+                rna.file.close()
+            source_paths[f"obs_names_{section}"] = str(rna_path)
+        else:
+            obs_names[section] = np.asarray(
+                [str(value) for value in spot_indices[section]],
+                dtype=object,
+            )
+
+    return (
+        embeddings,
+        spatial,
+        spot_indices,
+        obs_names,
+        summary,
+        loss_history,
+        source_paths,
+    )
 
 
-def save_label_csv(path: Path, labels: np.ndarray, coords: np.ndarray, spot_indices: np.ndarray) -> None:
+def save_label_csv(
+    path: Path,
+    labels: np.ndarray,
+    coords: np.ndarray,
+    spot_indices: np.ndarray,
+    obs_names: np.ndarray,
+) -> None:
     table = pd.DataFrame(
         {
             "row_index": np.arange(labels.shape[0], dtype=np.int64),
             "selected_spot_index": spot_indices.astype(np.int64, copy=False),
+            "obs_name": np.asarray(obs_names, dtype=str),
             "cluster": labels.astype(np.int64, copy=False),
             "x": coords[:, 0].astype(float, copy=False),
             "y": coords[:, 1].astype(float, copy=False),
@@ -253,6 +307,13 @@ def fit_kmeans(embedding: np.ndarray, n_clusters: int, seed: int, args) -> np.nd
     return model.fit_predict(embedding).astype(int)
 
 
+def prepare_kmeans_input(embedding: np.ndarray, args) -> np.ndarray:
+    values = np.asarray(embedding, dtype=np.float64)
+    if args.kmeans_input == "standardized":
+        return StandardScaler().fit_transform(values)
+    return values
+
+
 def save_batch_correction_metrics(
     output_dir: Path,
     embeddings: dict[str, np.ndarray],
@@ -288,16 +349,21 @@ def run_joint_kmeans(
     embeddings: dict[str, np.ndarray],
     spatial: dict[str, np.ndarray],
     spot_indices: dict[str, np.ndarray],
+    obs_names: dict[str, np.ndarray],
     output_dir: Path,
     n_clusters: int,
     seed: int,
     point_size: float,
     dpi: int,
     args,
+    make_plots: bool = True,
 ) -> dict[str, Any]:
     mode_dir = output_dir / f"joint_k{n_clusters}"
     ensure_dir(mode_dir)
-    stacked = np.vstack([embeddings[section] for section in SECTION_ORDER])
+    stacked = prepare_kmeans_input(
+        np.vstack([embeddings[section] for section in SECTION_ORDER]),
+        args,
+    )
     labels_all = fit_kmeans(stacked, n_clusters=n_clusters, seed=seed, args=args)
 
     labels_by_section = {}
@@ -310,19 +376,27 @@ def run_joint_kmeans(
         start = end
         label_path = mode_dir / f"joint_k{n_clusters}_{section}_labels.csv"
         png_path = mode_dir / f"joint_k{n_clusters}_{section}_spatial.png"
-        save_label_csv(label_path, labels, spatial[section], spot_indices[section])
-        plot_spatial(
-            png_path,
-            spatial[section],
+        save_label_csv(
+            label_path,
             labels,
-            f"CRC joint KMeans k={n_clusters} - {section}",
-            n_clusters,
-            point_size,
-            dpi,
-            int(args.plot_max_points),
-            seed,
+            spatial[section],
+            spot_indices[section],
+            obs_names[section],
         )
-        output_files.extend([str(label_path), str(png_path)])
+        output_files.append(str(label_path))
+        if make_plots:
+            plot_spatial(
+                png_path,
+                spatial[section],
+                labels,
+                f"CRC joint KMeans k={n_clusters} - {section}",
+                n_clusters,
+                point_size,
+                dpi,
+                int(args.plot_max_points),
+                seed,
+            )
+            output_files.append(str(png_path))
 
     count_path = mode_dir / f"joint_k{n_clusters}_cluster_counts.csv"
     save_count_csv(count_path, labels_by_section, n_clusters, "joint")
@@ -331,6 +405,8 @@ def run_joint_kmeans(
         "mode": "joint",
         "n_clusters": n_clusters,
         "kmeans_method": args.kmeans_method,
+        "kmeans_input": args.kmeans_input,
+        "plots_written": bool(make_plots),
         "output_dir": str(mode_dir),
         "files": output_files,
     }
@@ -340,6 +416,7 @@ def run_independent_kmeans(
     embeddings: dict[str, np.ndarray],
     spatial: dict[str, np.ndarray],
     spot_indices: dict[str, np.ndarray],
+    obs_names: dict[str, np.ndarray],
     output_dir: Path,
     n_clusters: int,
     seed: int,
@@ -352,11 +429,18 @@ def run_independent_kmeans(
     labels_by_section = {}
     output_files = []
     for section in SECTION_ORDER:
-        labels = fit_kmeans(embeddings[section], n_clusters=n_clusters, seed=seed, args=args)
+        section_input = prepare_kmeans_input(embeddings[section], args)
+        labels = fit_kmeans(section_input, n_clusters=n_clusters, seed=seed, args=args)
         labels_by_section[section] = labels
         label_path = mode_dir / f"independent_k{n_clusters}_{section}_labels.csv"
         png_path = mode_dir / f"independent_k{n_clusters}_{section}_spatial.png"
-        save_label_csv(label_path, labels, spatial[section], spot_indices[section])
+        save_label_csv(
+            label_path,
+            labels,
+            spatial[section],
+            spot_indices[section],
+            obs_names[section],
+        )
         plot_spatial(
             png_path,
             spatial[section],
@@ -414,12 +498,26 @@ def main() -> None:
     ensure_dir(output_dir)
 
     n_clusters_list = parse_cluster_counts(args.n_clusters)
-    embeddings, spatial, spot_indices, run_summary, loss_history, source_paths = load_inputs(input_dir)
+    metric_n_clusters_list = (
+        parse_cluster_counts(args.metric_n_clusters)
+        if args.metric_n_clusters
+        else list(n_clusters_list)
+    )
+    all_joint_clusters = sorted(set(n_clusters_list) | set(metric_n_clusters_list))
+    (
+        embeddings,
+        spatial,
+        spot_indices,
+        obs_names,
+        run_summary,
+        loss_history,
+        source_paths,
+    ) = load_inputs(input_dir)
     batch_metrics, batch_metrics_path = save_batch_correction_metrics(output_dir, embeddings, args)
 
     results = []
     training_curve_files = plot_loss_history(output_dir, loss_history)
-    for n_clusters in n_clusters_list:
+    for n_clusters in all_joint_clusters:
         total_n = sum(embeddings[section].shape[0] for section in SECTION_ORDER)
         if n_clusters > total_n:
             raise ValueError(f"n_clusters={n_clusters} exceeds total spot count {total_n}.")
@@ -431,38 +529,46 @@ def main() -> None:
                 embeddings,
                 spatial,
                 spot_indices,
+                obs_names,
                 output_dir,
                 n_clusters,
                 args.seed,
                 args.point_size,
                 args.dpi,
                 args,
+                make_plots=n_clusters in n_clusters_list,
             )
         )
-        results.append(
-            run_independent_kmeans(
-                embeddings,
-                spatial,
-                spot_indices,
-                output_dir,
-                n_clusters,
-                args.seed,
-                args.point_size,
-                args.dpi,
-                args,
+        if n_clusters in n_clusters_list:
+            results.append(
+                run_independent_kmeans(
+                    embeddings,
+                    spatial,
+                    spot_indices,
+                    obs_names,
+                    output_dir,
+                    n_clusters,
+                    args.seed,
+                    args.point_size,
+                    args.dpi,
+                    args,
+                )
             )
-        )
 
     output_files = [file_path for result in results for file_path in result["files"]]
     summary = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
         "seed": int(args.seed),
-        "n_clusters": n_clusters_list,
+        "n_clusters": all_joint_clusters,
+        "metric_n_clusters": metric_n_clusters_list,
+        "plot_n_clusters": n_clusters_list,
         "kmeans_method": args.kmeans_method,
+        "kmeans_input": args.kmeans_input,
         "batch_size": int(args.batch_size),
         "n_init": int(args.n_init),
         "max_iter": int(args.max_iter),
+        "metric_sample_size": int(args.metric_sample_size),
         "plot_max_points": int(args.plot_max_points),
         "point_size": float(args.point_size),
         "dpi": int(args.dpi),
@@ -470,6 +576,7 @@ def main() -> None:
         "embedding_shapes": {section: list(embeddings[section].shape) for section in SECTION_ORDER},
         "spatial_shapes": {section: list(spatial[section].shape) for section in SECTION_ORDER},
         "selected_spot_index_shapes": {section: list(spot_indices[section].shape) for section in SECTION_ORDER},
+        "obs_names_count": {section: int(len(obs_names[section])) for section in SECTION_ORDER},
         "source_paths": source_paths,
         "run_summary_mode": run_summary.get("mode"),
         "loss_history_epochs": len(loss_history) if isinstance(loss_history, list) else None,
@@ -499,7 +606,7 @@ def main() -> None:
         ]
         summary["n_clusters"] = sorted(
             {int(k) for k in existing.get("n_clusters", [])}
-            | {int(k) for k in n_clusters_list}
+            | {int(k) for k in all_joint_clusters}
         )
         summary["output_files"] = sorted(
             set(existing.get("output_files", [])) | set(summary["output_files"])
@@ -517,7 +624,7 @@ def main() -> None:
         clustering_dir=output_dir,
         sections=SECTION_ORDER,
         seed=int(args.seed),
-        metric_sample_size=10000,
+        metric_sample_size=int(args.metric_sample_size),
         spatial_neighbor_k=6,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))

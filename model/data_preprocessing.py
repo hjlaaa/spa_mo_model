@@ -6,6 +6,8 @@ the new project depend on ``/home/hujinlan/cosie`` at runtime.
 
 from __future__ import annotations
 
+import gc
+
 import numpy as np
 import scipy
 import scanpy as sc
@@ -47,7 +49,14 @@ def _resolve_hvg_num_for_modality(hvg_num, hvg_num_by_modality, modality):
 
 
 # Adapted from /home/hujinlan/cosie/COSIE/data_preprocessing.py::preprocess_adata
-def preprocess_adata(adata_raw, modality, hvg_num=3000, n_comps=50, target_sum=None):
+def preprocess_adata(
+    adata_raw,
+    modality,
+    hvg_num=3000,
+    n_comps=50,
+    target_sum=None,
+    copy_input=True,
+):
     """
     Preprocess an AnnData object using COSIE's modality-specific rules.
 
@@ -59,7 +68,7 @@ def preprocess_adata(adata_raw, modality, hvg_num=3000, n_comps=50, target_sum=N
     """
 
     modality = canonicalize_modality(modality)
-    adata_obj = adata_raw.copy()
+    adata_obj = adata_raw.copy() if copy_input else adata_raw
     adata_obj.var_names_make_unique()
 
     if modality == "HE":
@@ -123,6 +132,8 @@ def load_data(
     use_harmony=True,
     metacell=False,
     hvg_num_by_modality=None,
+    memory_efficient=False,
+    retain_processed=True,
 ):
     """
     Process COSIE-style ``data_dict`` into model-ready feature tensors.
@@ -159,7 +170,26 @@ def load_data(
     for modality, adata_list in shared_modalities.items():
         print(f"-------- Processing shared modality {modality} across sections --------")
 
-        if modality == "HE":
+        if memory_efficient:
+            common_var_names = adata_list[0].var_names
+            for adata_obj in adata_list[1:]:
+                common_var_names = common_var_names.intersection(adata_obj.var_names)
+            concat_sources = [
+                adata_obj
+                if adata_obj.n_vars == len(common_var_names)
+                and adata_obj.var_names.equals(common_var_names)
+                else adata_obj[:, common_var_names]
+                for adata_obj in adata_list
+            ]
+            section_keys = [
+                str(section) for section in shared_modality_sections[modality]
+            ]
+            adata_combined = ad.concat(
+                concat_sources,
+                keys=section_keys,
+                index_unique="_",
+            )
+        elif modality == "HE":
             adata_sub_list = []
             for i, adata_obj in enumerate(adata_list):
                 adata_sub = adata_obj.copy()
@@ -180,7 +210,8 @@ def load_data(
                 )
                 adata_sub_list.append(adata_sub)
 
-        adata_combined = ad.concat(adata_sub_list)
+        if not memory_efficient:
+            adata_combined = ad.concat(adata_sub_list)
         adata_combined.obs["batch"] = [
             f"batch_{shared_modality_sections[modality][i]}"
             for i, adata_obj in enumerate(adata_list)
@@ -196,6 +227,7 @@ def load_data(
                 modality,
             ),
             n_comps=n_comps,
+            copy_input=not memory_efficient,
         )
         if use_harmony:
             print(f"Running Harmony for {modality}")
@@ -211,14 +243,20 @@ def load_data(
         for i, section in enumerate(shared_modality_sections[modality]):
             print(i, section)
             key_name = f"{modality}_harmony" if use_harmony else f"{modality}_pca"
-            data_dict[modality][section].obsm[key_name] = combined_data_splits[i]
+            if retain_processed:
+                data_dict[modality][section].obsm[key_name] = combined_data_splits[i]
             if section not in feature_dict:
                 feature_dict[section] = {}
 
             print(feature_dict.keys())
-            shared_data = combined_data_splits[i].copy()
-            feature_dict[section][modality] = torch.from_numpy(shared_data).float()
+            shared_data = np.ascontiguousarray(
+                combined_data_splits[i], dtype=np.float32
+            )
+            feature_dict[section][modality] = torch.from_numpy(shared_data)
             del shared_data
+        if memory_efficient:
+            del combined_data_splits, pca_data_combined, adata_combined
+            gc.collect()
     print(feature_dict.keys())
 
     for modality, sections in data_dict.items():
@@ -242,8 +280,11 @@ def load_data(
                     target_sum=target_sum,
                 )
                 pca_data = adata_processed.obsm["X_pca"].copy()
-                data_dict[modality][section].obsm[f"{modality}_pca"] = pca_data
-                feature_dict[section][modality] = torch.from_numpy(pca_data).float()
+                if retain_processed:
+                    data_dict[modality][section].obsm[f"{modality}_pca"] = pca_data
+                feature_dict[section][modality] = torch.from_numpy(
+                    np.ascontiguousarray(pca_data, dtype=np.float32)
+                )
                 del pca_data
     print(feature_dict.keys())
     feature_dict = {f"s{int(k) + 1}": v for k, v in feature_dict.items()}
@@ -271,7 +312,7 @@ def load_data(
                     "across different modalities!"
                 )
 
-    return feature_dict, spatial_loc_dict, data_dict
+    return feature_dict, spatial_loc_dict, data_dict if retain_processed else None
 
 
 # Adapted from /home/hujinlan/cosie/COSIE/data_preprocessing.py::clr_normalize_each_cell
@@ -438,6 +479,8 @@ def load_cosie_style_data(
     use_harmony=True,
     metacell=False,
     hvg_num_by_modality=None,
+    memory_efficient=False,
+    retain_processed=True,
 ):
     """Alias for migrated COSIE ``load_data`` with canonical modality names."""
 
@@ -449,4 +492,6 @@ def load_cosie_style_data(
         use_harmony=use_harmony,
         metacell=metacell,
         hvg_num_by_modality=hvg_num_by_modality,
+        memory_efficient=memory_efficient,
+        retain_processed=retain_processed,
     )

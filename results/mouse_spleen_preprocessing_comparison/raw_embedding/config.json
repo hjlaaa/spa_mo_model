@@ -1,0 +1,137 @@
+{
+  "dataset": "Mouse_Spleen",
+  "method": "spa_mo_model",
+  "preprocessing": "raw_embedding",
+  "kmeans_input": "raw_final_embedding",
+  "metric_space": "raw_final_embedding",
+  "standardization": "none",
+  "joint_scaler_scope": "none",
+  "independent_scaler_scope": "none",
+  "kmeans_type": "sklearn.cluster.KMeans",
+  "joint_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "independent_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "spatial_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "plot_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "seed": 0,
+  "n_init": 20,
+  "max_iter": 300,
+  "n_obs": 5336,
+  "section_counts": {
+    "Mouse_Spleen1": 2568,
+    "Mouse_Spleen2": 2768
+  },
+  "embedding_dim": 128,
+  "cluster_asw_sample_size": 0,
+  "cluster_asw_rule": "full_n_obs_in_each_scope",
+  "ch_dbi_sample_size": 0,
+  "ch_dbi_rule": "full_n_obs_in_each_scope",
+  "label_asw": "not_applicable_no_ground_truth_labels",
+  "spatial_neighbor_k": 6,
+  "spatial_graph_scope": "exact_knn_within_each_section",
+  "spatial_graph_n_obs": {
+    "Mouse_Spleen1": 2568,
+    "Mouse_Spleen2": 2768
+  },
+  "joint_and_independent_labels_cover_all_spots": true,
+  "internal_spatial_and_figures_reuse_saved_labels": false,
+  "source_data_dir": "/home/hujinlan/spa_mo_model/data/Mouse_Spleen",
+  "source_files": [
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Spleen1.npy",
+      "sha256": "604e72f687a507913ca7da13b9cbc5094e20350c5850fc09b0f6f14e3ffc86e4"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Mouse_Spleen1.npy",
+      "sha256": "c94e33ce2d09c28a77640543e6e9b0cc5494cbe40b7583078dcb452b24f62570"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Mouse_Spleen1.npy",
+      "sha256": "cd3e3fb3ea46d1e153c10c0cd5a447e9b03022069df94757a44a3476554fc7df"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Spleen2.npy",
+      "sha256": "36cd6db27cbeab6ccc8d266dc0f6c5199a857b4ad4dcff92c9ec329f3d77c1b3"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Mouse_Spleen2.npy",
+      "sha256": "c783c1ee669ddb4032b51212d9fb511141b897361346b95d77fe8e462124454c"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Mouse_Spleen2.npy",
+      "sha256": "defd287a1be5097f2afc5bf8d509ff4f5784c1fde207bf07e163e5d558316abc"
+    }
+  ],
+  "created_at": "2026-07-26T02:32:40.650391+08:00",
+  "plot_point_size": 10.0,
+  "plot_dpi": 220,
+  "generation_script": "/home/hujinlan/spa_mo_model/scripts/compare_mouse_spleen_kmeans_preprocessing.py",
+  "generation_script_sha256": "cc06c0258cd9765889a08ccf2625ca3bed8896c507bb7da32ef3af7820b7290d",
+  "figures_redrawn_at": "2026-07-26T18:30:08.329732+08:00",
+  "retained_clustering_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "deleted_clustering_k_values": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "metrics_k_values_without_saved_label_directories": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "retained_k_metrics_and_figures_reuse_saved_labels": true,
+  "clustering_directories_pruned_at": "2026-07-26T18:30:28.796967+08:00"
+}

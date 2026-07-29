@@ -1,0 +1,17 @@
+{
+  "dataset_path": "/home/hujinlan/spa_mo_model/data/Simulation",
+  "sections": [
+    "Simulation1",
+    "Simulation2",
+    "Simulation3",
+    "Simulation4",
+    "Simulation5"
+  ],
+  "total_spots": 6480,
+  "shared_rna_features": 1000,
+  "shared_adt_features": 100,
+  "matrix_source": "X (layers['counts'] intentionally not used)",
+  "truth_policy": "spatial_domain=background for zero spfac rows; otherwise sp1..sp4; truth is retained only as output metadata for analysis",
+  "graph_policy": "spatial graph built independently inside each section",
+  "barcode_policy": "section-prefixed IDs in combined outputs"
+}

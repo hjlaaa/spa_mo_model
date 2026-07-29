@@ -1,0 +1,67 @@
+{
+  "dataset": "Human_Lymph_Node",
+  "method": "spa_mo_model",
+  "legacy_results_modified": false,
+  "comparison_root": "/home/hujinlan/spa_mo_model/results/human_lymph_node_preprocessing_comparison",
+  "branches": {
+    "raw_embedding": "/home/hujinlan/spa_mo_model/results/human_lymph_node_preprocessing_comparison/raw_embedding",
+    "standardized_embedding": "/home/hujinlan/spa_mo_model/results/human_lymph_node_preprocessing_comparison/standardized_embedding"
+  },
+  "comparison_metrics": "/home/hujinlan/spa_mo_model/results/human_lymph_node_preprocessing_comparison/comparison_metrics",
+  "shared_metrics": "/home/hujinlan/spa_mo_model/results/human_lymph_node_preprocessing_comparison/shared_metrics",
+  "joint_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "independent_metric_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "retained_clustering_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "deleted_clustering_k_values": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "metrics_k_values_without_saved_label_directories": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "source_data_dir": "/home/hujinlan/spa_mo_model/data/Human_Lymph_Node",
+  "source_file_hashes": {
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Human_Lymph_Node_A1.npy": "bb563b08544597afdf9fb01e33f7ad5b56abacd310346bd5866c87d2f44bb8cc",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Human_Lymph_Node_A1.npy": "fc59adf750a880acb941170ddaf0dc4a5d6fabce78e34321e4091739e7d90980",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Human_Lymph_Node_A1.npy": "44cb0e69746a269bba7f243bf3fa112329dc0b3290390f93a4a4647e763057fb",
+    "/home/hujinlan/spa_mo_model/data/Human_Lymph_Node/Human_Lymph_Node_A1/adata_RNA.h5ad": "d9eab0cdf8cdefe6ed60943e178bf38ce43b0b09dade6e5da268be2db0308360",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Human_Lymph_Node_D1.npy": "796304db8e8e521da4bd486186003e397c0bb9800780a4740594e489ac6f19b1",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Human_Lymph_Node_D1.npy": "8f6f06af5431040b20b81e7c25e8852f4b91ac1f998182192b0b421c43897612",
+    "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Human_Lymph_Node_D1.npy": "28e1fa3251cdb7c754ffd486b21b9476ff8519eda9cea0f641fc1cf3b13fe775",
+    "/home/hujinlan/spa_mo_model/data/Human_Lymph_Node/Human_Lymph_Node_D1/adata_RNA.h5ad": "e827f5cdbbd968f8c8d22567a9246cae02c3562af066c81dd6a0cac02513dd5d"
+  },
+  "created_at": "2026-07-27T13:32:50.583138+08:00"
+}

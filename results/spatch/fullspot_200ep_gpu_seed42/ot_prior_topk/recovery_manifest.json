@@ -1,0 +1,40 @@
+{
+  "artifact_provenance": "posthoc_recomputed_from_saved_final_embeddings",
+  "retraining_performed": false,
+  "original_epoch200_cached_prior_recovered": false,
+  "generated_at_utc": "2026-07-25T14:17:36.090861+00:00",
+  "source_embedding_paths": {
+    "section1": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/final_embeddings_section1.npy",
+    "section2": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/final_embeddings_section2.npy"
+  },
+  "source_embedding_sha256": {
+    "section1": "4ca68344b0483796de9c2987107fc76698b86fca946e2d5784cccd44d3bb113d",
+    "section2": "c5f6e1e962637cbf2e17f87bcbc954956b1fc5ae3e56886c034d8595b6510c12"
+  },
+  "note": "Post-hoc sparse top-k UOT recomputation from the saved final embeddings using the completed run's original UOT and FAISS parameters. No model training or model forward pass was performed. This is not a byte-for-byte recovery of the epoch-200 cached prior, which was not saved.",
+  "dataset": "spatch",
+  "method": "spa_mo_model",
+  "section_order": [
+    "section1",
+    "section2"
+  ],
+  "parameters_source": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/run_summary.json",
+  "files": {
+    "section1_to_section2": {
+      "topk_idx": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section1_to_section2_topk_idx.npy",
+      "topk_weight": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section1_to_section2_topk_weight.npy",
+      "confidence": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section1_to_section2_confidence.npy",
+      "row_mass": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section1_to_section2_row_mass.npy",
+      "metadata": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section1_to_section2_metadata.json"
+    },
+    "section2_to_section1": {
+      "topk_idx": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section2_to_section1_topk_idx.npy",
+      "topk_weight": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section2_to_section1_topk_weight.npy",
+      "confidence": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section2_to_section1_confidence.npy",
+      "row_mass": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section2_to_section1_row_mass.npy",
+      "metadata": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/ot_prior_topk/section2_to_section1_metadata.json"
+    }
+  },
+  "cuda_device": "NVIDIA GeForce RTX 4090",
+  "pytorch_cuda_alloc_conf": "expandable_segments:True"
+}

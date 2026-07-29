@@ -1,0 +1,89 @@
+{
+  "dataset": "MouseBrain",
+  "method": "spa_mo_model",
+  "legacy_results_modified": false,
+  "comparison_root": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison",
+  "branches": {
+    "raw_embedding": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/raw_embedding",
+    "standardized_embedding": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/standardized_embedding"
+  },
+  "comparison_metrics": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/comparison_metrics",
+  "shared_metrics": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/shared_metrics",
+  "joint_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "independent_metric_k_values": [
+    5,
+    6,
+    8,
+    10
+  ],
+  "retained_clustering_k_values": [
+    5,
+    6,
+    8,
+    10
+  ],
+  "deleted_clustering_k_values": [
+    2,
+    3,
+    4,
+    7,
+    9,
+    11,
+    12
+  ],
+  "metrics_k_values_without_saved_label_directories": [
+    2,
+    3,
+    4,
+    7,
+    9,
+    11,
+    12
+  ],
+  "external_label_keys": [
+    "RegionLoupe",
+    "annotations",
+    "celltype",
+    "Y.l1",
+    "Y",
+    "group"
+  ],
+  "group_definition": "aligned section vector: s1/s2/s3",
+  "group_diagnostic_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "group_diagnostic_outputs": {
+    "raw": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/raw_embedding/metrics/group_diagnostic_metrics.csv",
+    "standardized": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/standardized_embedding/metrics/group_diagnostic_metrics.csv",
+    "deltas": "/home/hujinlan/spa_mo_model/results/mousebrain_preprocessing_comparison/comparison_metrics/group_diagnostic_metrics_deltas.csv"
+  },
+  "source_data_dir": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain",
+  "source_file_hashes": {
+    "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings/s1_final_embedding.npy": "393130671f0be874145051e0a6b9b1fb60335f98b1efec18160288773f204f3f",
+    "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings/s2_final_embedding.npy": "43e1b43e099237b52e90334a707a2c0d8e33912dbfb8816d799879708ad05684",
+    "/home/hujinlan/spa_mo_model/results/mousebrain_test/fullspot_warmup_schedule/epochs_200/final_embeddings/s3_final_embedding.npy": "edf58193e785c77246e7104684402a11aaed0ad1d29e31270128f22c803e9d28"
+  },
+  "created_at": "2026-07-27T14:15:33.499173+08:00"
+}

@@ -204,6 +204,10 @@ def safe_embedding_cluster_metrics(
     labels: np.ndarray,
     sample_size: int,
     seed: int,
+    *,
+    metric_embedding: np.ndarray | None = None,
+    full_ch_dbi: bool = False,
+    sklearn_silhouette_sampling: bool = False,
 ) -> dict[str, float | int | None]:
     unique = np.unique(labels)
     metrics: dict[str, float | int | None] = {
@@ -215,16 +219,34 @@ def safe_embedding_cluster_metrics(
     }
     if unique.shape[0] < 2 or unique.shape[0] >= embedding.shape[0]:
         return metrics
-    idx = sampled_indices(embedding.shape[0], sample_size, seed)
-    x = StandardScaler().fit_transform(embedding[idx])
-    y = labels[idx]
+    if metric_embedding is None:
+        idx = sampled_indices(embedding.shape[0], sample_size, seed)
+        x = StandardScaler().fit_transform(embedding[idx])
+        y = labels[idx]
+    else:
+        x = metric_embedding
+        y = labels
     if np.unique(y).shape[0] < 2 or np.unique(y).shape[0] >= y.shape[0]:
         return metrics
-    asw = float(silhouette_score(x, y))
+    if sklearn_silhouette_sampling:
+        actual_sample_size = min(int(sample_size), len(y)) if sample_size > 0 else None
+        asw = float(
+            silhouette_score(
+                x,
+                y,
+                sample_size=actual_sample_size,
+                random_state=seed,
+            )
+        )
+    else:
+        asw = float(silhouette_score(x, y))
     metrics["cluster_asw"] = asw
     metrics["cluster_asw_scaled"] = float((asw + 1.0) / 2.0)
-    metrics["dbi"] = float(davies_bouldin_score(x, y))
-    metrics["calinski_harabasz"] = float(calinski_harabasz_score(x, y))
+    if full_ch_dbi or metric_embedding is None:
+        metrics["dbi"] = float(davies_bouldin_score(x, y))
+        metrics["calinski_harabasz"] = float(calinski_harabasz_score(x, y))
+    metrics["metric_n_obs"] = int(len(y))
+    metrics["silhouette_sample_size"] = int(min(sample_size, len(y)))
     return metrics
 
 
@@ -235,6 +257,11 @@ def supervised_metrics(
     label_keys: list[str],
     sample_size: int,
     seed: int,
+    *,
+    metric_embedding: np.ndarray | None = None,
+    sklearn_silhouette_sampling: bool = False,
+    label_asw_cache: dict[tuple[str, str], float] | None = None,
+    cache_scope: str = "",
 ) -> list[dict[str, Any]]:
     rows = []
     for key in label_keys:
@@ -259,15 +286,34 @@ def supervised_metrics(
             "label_asw_scaled": None,
         }
         if np.unique(true).shape[0] >= 2 and np.unique(true).shape[0] < true.shape[0]:
-            idx_all = np.where(mask)[0]
-            idx = sampled_indices(idx_all.shape[0], sample_size, seed)
-            chosen = idx_all[idx]
-            y = raw.astype(str).to_numpy()[chosen]
-            if np.unique(y).shape[0] >= 2 and np.unique(y).shape[0] < y.shape[0]:
-                x = StandardScaler().fit_transform(embedding[chosen])
-                asw = float(silhouette_score(x, y))
-                row["label_asw"] = asw
-                row["label_asw_scaled"] = float((asw + 1.0) / 2.0)
+            cache_key = (cache_scope, key)
+            if label_asw_cache is not None and cache_key in label_asw_cache:
+                asw = label_asw_cache[cache_key]
+            else:
+                if metric_embedding is not None and sklearn_silhouette_sampling:
+                    x = metric_embedding[mask]
+                    asw = float(
+                        silhouette_score(
+                            x,
+                            true,
+                            sample_size=min(int(sample_size), len(true)),
+                            random_state=seed,
+                        )
+                    )
+                else:
+                    idx_all = np.where(mask)[0]
+                    idx = sampled_indices(idx_all.shape[0], sample_size, seed)
+                    chosen = idx_all[idx]
+                    y = raw.astype(str).to_numpy()[chosen]
+                    if np.unique(y).shape[0] < 2 or np.unique(y).shape[0] >= y.shape[0]:
+                        rows.append(row)
+                        continue
+                    x = StandardScaler().fit_transform(embedding[chosen])
+                    asw = float(silhouette_score(x, y))
+                if label_asw_cache is not None:
+                    label_asw_cache[cache_key] = asw
+            row["label_asw"] = asw
+            row["label_asw_scaled"] = float((asw + 1.0) / 2.0)
         rows.append(row)
     return rows
 
@@ -374,7 +420,10 @@ def run_joint(
     args,
 ):
     out_dir = output_dir / f"joint_k{n_clusters}"
-    ensure_dir(out_dir)
+    retain_k = getattr(args, "retain_k_directories", None)
+    persist_outputs = retain_k is None or int(n_clusters) in set(retain_k)
+    if persist_outputs:
+        ensure_dir(out_dir)
     section_order = list(embeddings.keys())
     stacked = np.vstack([embeddings[section] for section in section_order])
     labels_all = fit_predict(stacked, n_clusters, args)
@@ -383,19 +432,54 @@ def run_joint(
 
     files = []
     metrics_rows = []
-    cluster_metrics = safe_embedding_cluster_metrics(stacked, labels_all, args.metric_sample_size, args.seed)
-    for row in supervised_metrics(stacked, labels_all, label_table, label_keys, args.metric_sample_size, args.seed):
+    joint_metric_embedding = getattr(args, "_joint_metric_embedding", None)
+    unified_metrics = bool(getattr(args, "unified_full_metric_space", False))
+    if not hasattr(args, "_label_asw_cache"):
+        args._label_asw_cache = {}
+    cluster_metrics = safe_embedding_cluster_metrics(
+        stacked,
+        labels_all,
+        args.metric_sample_size,
+        args.seed,
+        metric_embedding=joint_metric_embedding,
+        full_ch_dbi=unified_metrics,
+        sklearn_silhouette_sampling=unified_metrics,
+    )
+    for row in supervised_metrics(
+        stacked,
+        labels_all,
+        label_table,
+        label_keys,
+        args.metric_sample_size,
+        args.seed,
+        metric_embedding=joint_metric_embedding,
+        sklearn_silhouette_sampling=unified_metrics,
+        label_asw_cache=args._label_asw_cache,
+        cache_scope="joint",
+    ):
         metrics_rows.append({"mode": "joint", "n_clusters": n_clusters, **cluster_metrics, **row})
     section_truth = label_table["section"].astype(str).to_numpy()
-    section_idx = sampled_indices(
-        section_truth.shape[0], args.metric_sample_size, args.seed
-    )
-    section_asw = float(
-        silhouette_score(
-            StandardScaler().fit_transform(stacked[section_idx]),
-            section_truth[section_idx],
+    if unified_metrics and joint_metric_embedding is not None:
+        if not hasattr(args, "_section_label_asw"):
+            args._section_label_asw = float(
+                silhouette_score(
+                    joint_metric_embedding,
+                    section_truth,
+                    sample_size=min(int(args.metric_sample_size), len(section_truth)),
+                    random_state=args.seed,
+                )
+            )
+        section_asw = args._section_label_asw
+    else:
+        section_idx = sampled_indices(
+            section_truth.shape[0], args.metric_sample_size, args.seed
         )
-    )
+        section_asw = float(
+            silhouette_score(
+                StandardScaler().fit_transform(stacked[section_idx]),
+                section_truth[section_idx],
+            )
+        )
     metrics_rows.append(
         {
             "mode": "joint",
@@ -418,21 +502,22 @@ def run_joint(
     for idx, section in enumerate(section_order):
         start, end = offsets[idx], offsets[idx + 1]
         section_labels = labels_all[start:end]
-        label_path = out_dir / f"joint_k{n_clusters}_{section}_labels.csv"
-        write_labels(label_path, section, spot_indices[section], obs_meta[section], section_labels)
-        files.append(str(label_path))
-        png_path = out_dir / f"joint_k{n_clusters}_{section}_spatial.png"
-        plot_spatial(
-            spatial[section],
-            section_labels,
-            f"joint k={n_clusters} {section}",
-            png_path,
-            args.point_size,
-            args.dpi,
-            args.plot_max_points,
-            args.seed,
-        )
-        files.append(str(png_path))
+        if persist_outputs:
+            label_path = out_dir / f"joint_k{n_clusters}_{section}_labels.csv"
+            write_labels(label_path, section, spot_indices[section], obs_meta[section], section_labels)
+            files.append(str(label_path))
+            png_path = out_dir / f"joint_k{n_clusters}_{section}_spatial.png"
+            plot_spatial(
+                spatial[section],
+                section_labels,
+                f"joint k={n_clusters} {section}",
+                png_path,
+                args.point_size,
+                args.dpi,
+                args.plot_max_points,
+                args.seed,
+            )
+            files.append(str(png_path))
         counts.extend(
             {
                 "section": section,
@@ -455,9 +540,10 @@ def run_joint(
                 ),
             }
         )
-    count_path = out_dir / f"joint_k{n_clusters}_cluster_counts.csv"
-    pd.DataFrame(counts).to_csv(count_path, index=False)
-    files.append(str(count_path))
+    if persist_outputs:
+        count_path = out_dir / f"joint_k{n_clusters}_cluster_counts.csv"
+        pd.DataFrame(counts).to_csv(count_path, index=False)
+        files.append(str(count_path))
     return {"mode": "joint", "n_clusters": n_clusters, "files": files, "metrics": metrics_rows}
 
 
@@ -472,29 +558,56 @@ def run_independent(
     args,
 ):
     out_dir = output_dir / f"independent_k{n_clusters}"
-    ensure_dir(out_dir)
+    retain_k = getattr(args, "retain_k_directories", None)
+    persist_outputs = retain_k is None or int(n_clusters) in set(retain_k)
+    if persist_outputs:
+        ensure_dir(out_dir)
     files = []
     metrics_rows = []
     counts = []
     for section, embedding in embeddings.items():
         labels = fit_predict(embedding, n_clusters, args)
-        label_path = out_dir / f"independent_k{n_clusters}_{section}_labels.csv"
-        write_labels(label_path, section, spot_indices[section], obs_meta[section], labels)
-        files.append(str(label_path))
-        png_path = out_dir / f"independent_k{n_clusters}_{section}_spatial.png"
-        plot_spatial(
-            spatial[section],
+        if persist_outputs:
+            label_path = out_dir / f"independent_k{n_clusters}_{section}_labels.csv"
+            write_labels(label_path, section, spot_indices[section], obs_meta[section], labels)
+            files.append(str(label_path))
+            png_path = out_dir / f"independent_k{n_clusters}_{section}_spatial.png"
+            plot_spatial(
+                spatial[section],
+                labels,
+                f"independent k={n_clusters} {section}",
+                png_path,
+                args.point_size,
+                args.dpi,
+                args.plot_max_points,
+                args.seed,
+            )
+            files.append(str(png_path))
+        section_metric_embedding = getattr(args, "_section_metric_embeddings", {}).get(section)
+        unified_metrics = bool(getattr(args, "unified_full_metric_space", False))
+        if not hasattr(args, "_label_asw_cache"):
+            args._label_asw_cache = {}
+        cluster_metrics = safe_embedding_cluster_metrics(
+            embedding,
             labels,
-            f"independent k={n_clusters} {section}",
-            png_path,
-            args.point_size,
-            args.dpi,
-            args.plot_max_points,
+            args.metric_sample_size,
             args.seed,
+            metric_embedding=section_metric_embedding,
+            full_ch_dbi=unified_metrics,
+            sklearn_silhouette_sampling=unified_metrics,
         )
-        files.append(str(png_path))
-        cluster_metrics = safe_embedding_cluster_metrics(embedding, labels, args.metric_sample_size, args.seed)
-        for row in supervised_metrics(embedding, labels, obs_meta[section], label_keys, args.metric_sample_size, args.seed):
+        for row in supervised_metrics(
+            embedding,
+            labels,
+            obs_meta[section],
+            label_keys,
+            args.metric_sample_size,
+            args.seed,
+            metric_embedding=section_metric_embedding,
+            sklearn_silhouette_sampling=unified_metrics,
+            label_asw_cache=args._label_asw_cache,
+            cache_scope=f"independent:{section}",
+        ):
             metrics_rows.append({"mode": "independent", "section": section, "n_clusters": n_clusters, **cluster_metrics, **row})
         metrics_rows.append(
             {
@@ -514,9 +627,10 @@ def run_independent(
             }
             for cluster, count in zip(*np.unique(labels, return_counts=True))
         )
-    count_path = out_dir / f"independent_k{n_clusters}_cluster_counts.csv"
-    pd.DataFrame(counts).to_csv(count_path, index=False)
-    files.append(str(count_path))
+    if persist_outputs:
+        count_path = out_dir / f"independent_k{n_clusters}_cluster_counts.csv"
+        pd.DataFrame(counts).to_csv(count_path, index=False)
+        files.append(str(count_path))
     return {"mode": "independent", "n_clusters": n_clusters, "files": files, "metrics": metrics_rows}
 
 
@@ -559,6 +673,7 @@ def main() -> None:
         "n_clusters": n_clusters_list,
         "label_keys": label_keys,
         "kmeans_method": args.kmeans_method,
+        "kmeans_input": "raw_final_embedding",
         "batch_size": int(args.batch_size),
         "n_init": int(args.n_init),
         "max_iter": int(args.max_iter),

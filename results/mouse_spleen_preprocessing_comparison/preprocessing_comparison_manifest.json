@@ -1,0 +1,69 @@
+{
+  "dataset": "Mouse_Spleen",
+  "method": "spa_mo_model",
+  "legacy_results_modified": false,
+  "comparison_root": "/home/hujinlan/spa_mo_model/results/mouse_spleen_preprocessing_comparison",
+  "branches": {
+    "raw_embedding": "/home/hujinlan/spa_mo_model/results/mouse_spleen_preprocessing_comparison/raw_embedding",
+    "standardized_embedding": "/home/hujinlan/spa_mo_model/results/mouse_spleen_preprocessing_comparison/standardized_embedding"
+  },
+  "comparison_metrics": "/home/hujinlan/spa_mo_model/results/mouse_spleen_preprocessing_comparison/comparison_metrics",
+  "shared_metrics": "/home/hujinlan/spa_mo_model/results/mouse_spleen_preprocessing_comparison/shared_metrics",
+  "metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "plot_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "retained_clustering_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "deleted_clustering_k_values": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "metrics_k_values_without_saved_label_directories": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "plot_point_size": 10.0,
+  "plot_dpi": 220,
+  "source_data_dir": "/home/hujinlan/spa_mo_model/data/Mouse_Spleen",
+  "source_file_hashes": {
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Spleen1.npy": "604e72f687a507913ca7da13b9cbc5094e20350c5850fc09b0f6f14e3ffc86e4",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Mouse_Spleen1.npy": "c94e33ce2d09c28a77640543e6e9b0cc5494cbe40b7583078dcb452b24f62570",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Mouse_Spleen1.npy": "cd3e3fb3ea46d1e153c10c0cd5a447e9b03022069df94757a44a3476554fc7df",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Spleen2.npy": "36cd6db27cbeab6ccc8d266dc0f6c5199a857b4ad4dcff92c9ec329f3d77c1b3",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/selected_spot_indices_Mouse_Spleen2.npy": "c783c1ee669ddb4032b51212d9fb511141b897361346b95d77fe8e462124454c",
+    "/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/spatial_Mouse_Spleen2.npy": "defd287a1be5097f2afc5bf8d509ff4f5784c1fde207bf07e163e5d558316abc"
+  },
+  "generation_script": "/home/hujinlan/spa_mo_model/scripts/compare_mouse_spleen_kmeans_preprocessing.py",
+  "generation_script_sha256": "cc06c0258cd9765889a08ccf2625ca3bed8896c507bb7da32ef3af7820b7290d",
+  "created_at": "2026-07-26T18:30:28.801039+08:00"
+}

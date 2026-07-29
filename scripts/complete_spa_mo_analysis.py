@@ -111,6 +111,94 @@ def _cluster_metrics(
     return result
 
 
+def _common_metrics_from_primary(
+    path: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Convert the authoritative clustering metrics into the common schema."""
+    primary = pd.read_csv(path)
+    required = {
+        "mode",
+        "n_clusters",
+        "cluster_asw",
+        "calinski_harabasz",
+        "dbi",
+        "metric_n_obs",
+        "silhouette_sample_size",
+    }
+    missing = sorted(required.difference(primary.columns))
+    if missing:
+        raise KeyError(f"{path}: missing unified metric columns {missing}")
+
+    rows: list[dict[str, Any]] = []
+    joint = primary[primary["mode"].eq("joint")]
+    for k, frame in joint.groupby("n_clusters", sort=True):
+        row = frame.iloc[0]
+        section_row = frame[frame["label_key"].eq("section")]
+        section_row = section_row.iloc[0] if not section_row.empty else None
+        rows.append(
+            {
+                "mode": "joint",
+                "k": int(k),
+                "scope": "combined",
+                "n_obs": int(row["metric_n_obs"]),
+                "metric_sample_size": int(row["metric_n_obs"]),
+                "silhouette_sample_size": int(row["silhouette_sample_size"]),
+                "n_clusters_observed": int(row["n_clusters_observed"]),
+                "silhouette": float(row["cluster_asw"]),
+                "calinski_harabasz": float(row["calinski_harabasz"]),
+                "davies_bouldin": float(row["dbi"]),
+                "section_ARI_diagnostic": (
+                    float(section_row["ari"]) if section_row is not None else np.nan
+                ),
+                "section_NMI_diagnostic": (
+                    float(section_row["nmi"]) if section_row is not None else np.nan
+                ),
+            }
+        )
+
+    independent = primary[primary["mode"].eq("independent")]
+    for (k, section), frame in independent.groupby(
+        ["n_clusters", "section"], sort=True
+    ):
+        row = frame.iloc[0]
+        rows.append(
+            {
+                "mode": "independent",
+                "k": int(k),
+                "scope": str(section),
+                "n_obs": int(row["metric_n_obs"]),
+                "metric_sample_size": int(row["metric_n_obs"]),
+                "silhouette_sample_size": int(row["silhouette_sample_size"]),
+                "n_clusters_observed": int(row["n_clusters_observed"]),
+                "silhouette": float(row["cluster_asw"]),
+                "calinski_harabasz": float(row["calinski_harabasz"]),
+                "davies_bouldin": float(row["dbi"]),
+                "section_ARI_diagnostic": np.nan,
+                "section_NMI_diagnostic": np.nan,
+            }
+        )
+    metrics = pd.DataFrame(rows)
+    diagnostics = metrics.loc[
+        metrics["mode"].eq("joint"),
+        ["mode", "k", "section_ARI_diagnostic", "section_NMI_diagnostic"],
+    ].copy()
+    spatial = primary[
+        primary["mode"].isin(
+            ["joint_section_spatial", "independent_section_spatial"]
+        )
+    ][["mode", "n_clusters", "section", "spatial_neighbor_agreement"]].copy()
+    spatial["mode"] = spatial["mode"].str.replace(
+        "_section_spatial", "", regex=False
+    )
+    spatial = spatial.rename(
+        columns={
+            "n_clusters": "k",
+            "spatial_neighbor_agreement": "neighbor_same_cluster_fraction",
+        }
+    )
+    return metrics, diagnostics, spatial
+
+
 def _load_mode_labels(
     mode_dir: Path,
     sections: list[str],
@@ -229,8 +317,8 @@ def _write_summary(
             "Davies-Bouldin is lower-is-better. Section ARI/NMI are diagnostics: "
             "values near zero indicate that clusters are not simply section labels.",
             "",
-            "| k | Silhouette | CH | DB | Section ARI | Section NMI | Metric spots |",
-            "|---:|---:|---:|---:|---:|---:|---:|",
+            "| k | Silhouette | CH | DB | Section ARI | Section NMI | ASW spots | CH/DB spots |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     joint = metrics[(metrics["mode"] == "joint") & (metrics["scope"] == "combined")]
@@ -240,6 +328,7 @@ def _write_summary(
             f"{_fmt(row['calinski_harabasz'])} | {_fmt(row['davies_bouldin'])} | "
             f"{_fmt(row['section_ARI_diagnostic'])} | "
             f"{_fmt(row['section_NMI_diagnostic'])} | "
+            f"{int(row.get('silhouette_sample_size', row['metric_sample_size']))} | "
             f"{int(row['metric_sample_size'])} |"
         )
 
@@ -290,6 +379,7 @@ def complete_analysis(
     seed: int = 42,
     metric_sample_size: int = 10000,
     spatial_neighbor_k: int = 6,
+    primary_metrics_path: Path | None = None,
 ) -> dict[str, str]:
     run_summary = _load_json(run_dir / "run_summary.json")
     embeddings = {
@@ -305,15 +395,18 @@ def complete_analysis(
             raise ValueError(f"{section}: embedding must be a finite 2D matrix")
 
     mode_dirs = []
-    for mode in ("joint", "independent"):
-        for path in clustering_dir.glob(f"{mode}_k*"):
-            try:
-                k = int(path.name.rsplit("_k", 1)[1])
-            except ValueError:
-                continue
-            mode_dirs.append((mode, k, path))
-    if not mode_dirs:
-        raise FileNotFoundError(f"No joint_k*/independent_k* directories in {clustering_dir}")
+    if primary_metrics_path is None:
+        for mode in ("joint", "independent"):
+            for path in clustering_dir.glob(f"{mode}_k*"):
+                try:
+                    k = int(path.name.rsplit("_k", 1)[1])
+                except ValueError:
+                    continue
+                mode_dirs.append((mode, k, path))
+        if not mode_dirs:
+            raise FileNotFoundError(
+                f"No joint_k*/independent_k* directories in {clustering_dir}"
+            )
 
     metric_rows: list[dict[str, Any]] = []
     spatial_frames = []
@@ -350,6 +443,8 @@ def complete_analysis(
         continuity["k"] = k
         spatial_frames.append(continuity)
 
+        if primary_metrics_path is not None:
+            continue
         if mode == "joint":
             x = np.vstack([embeddings[section] for section in sections])
             labels = np.concatenate(
@@ -398,8 +493,14 @@ def complete_analysis(
                     }
                 )
 
-    metrics = pd.DataFrame(metric_rows)
-    spatial = pd.concat(spatial_frames, ignore_index=True)
+    if primary_metrics_path is not None:
+        metrics, diagnostics, spatial = _common_metrics_from_primary(
+            primary_metrics_path
+        )
+        diagnostic_rows = diagnostics.to_dict("records")
+    else:
+        metrics = pd.DataFrame(metric_rows)
+        spatial = pd.concat(spatial_frames, ignore_index=True)
     metrics_dir = analysis_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = metrics_dir / "common_clustering_metrics.csv"
@@ -426,6 +527,9 @@ def complete_analysis(
         "clustering_dir": str(clustering_dir),
         "sections": sections,
         "metric_sample_size": metric_sample_size,
+        "primary_metrics_path": (
+            str(primary_metrics_path) if primary_metrics_path is not None else None
+        ),
         "spatial_neighbor_k": spatial_neighbor_k,
         "metrics": str(metrics_path),
         "section_diagnostics": str(diagnostic_path),

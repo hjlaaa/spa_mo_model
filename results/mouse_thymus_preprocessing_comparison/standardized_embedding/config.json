@@ -1,0 +1,164 @@
+{
+  "dataset": "Mouse_Thymus",
+  "method": "spa_mo_model",
+  "preprocessing": "standardized_embedding",
+  "kmeans_input": "standardized_final_embedding",
+  "metric_space": "standardized_final_embedding",
+  "standardization": "sklearn.preprocessing.StandardScaler",
+  "joint_scaler_scope": "all_17824_spots",
+  "independent_scaler_scope": "fit_per_section",
+  "kmeans_type": "sklearn.cluster.KMeans",
+  "joint_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "independent_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "spatial_metric_k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "plot_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "seed": 0,
+  "n_init": 20,
+  "max_iter": 300,
+  "n_obs": 17824,
+  "section_counts": {
+    "Mouse_Thymus1": 4697,
+    "Mouse_Thymus2": 4253,
+    "Mouse_Thymus3": 4646,
+    "Mouse_Thymus4": 4228
+  },
+  "embedding_dim": 128,
+  "cluster_asw_sample_size_joint": 10000,
+  "cluster_asw_sample_size_independent": {
+    "Mouse_Thymus1": 2635,
+    "Mouse_Thymus2": 2386,
+    "Mouse_Thymus3": 2607,
+    "Mouse_Thymus4": 2372
+  },
+  "cluster_asw_rule": "fixed_section_stratified_section_barcode_sample_shared_everywhere",
+  "cluster_asw_sampling_seed": 0,
+  "cluster_asw_sample_file": "/home/hujinlan/spa_mo_model/results/mouse_thymus_preprocessing_comparison/shared_metrics/asw_sample.csv",
+  "cluster_asw_sample_sha256": "00a6ede1cd4ca0d5a5d8af355561899d0cb1696745742e5ba887324e12db0c8e",
+  "ch_dbi_sample_size": 0,
+  "ch_dbi_rule": "full_n_obs_in_each_scope",
+  "label_asw": "not_applicable_no_ground_truth_labels",
+  "section_asw_sample_size": 10000,
+  "spatial_neighbor_k": 6,
+  "spatial_graph_scope": "exact_knn_within_each_section",
+  "spatial_graph_n_obs": {
+    "Mouse_Thymus1": 4697,
+    "Mouse_Thymus2": 4253,
+    "Mouse_Thymus3": 4646,
+    "Mouse_Thymus4": 4228
+  },
+  "joint_and_independent_labels_cover_all_spots": true,
+  "internal_spatial_and_figures_reuse_saved_labels": false,
+  "source_data_dir": "/home/hujinlan/spa_mo_model/data/Mouse_Thymus",
+  "source_files": [
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Thymus1.npy",
+      "sha256": "4e59133930727e8ad847a153f67be0c80ac9f6db7100a26a9ade42a2026ce198"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Mouse_Thymus1.csv",
+      "sha256": "4484d35860673b799077ec64ccda3cedccb4dc34b423ed23441cbb3f57b3a13c"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Thymus2.npy",
+      "sha256": "809a74b54e0155486babcf7c2e2b6872499d29af75ca15189cb3d7a0dbe87517"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Mouse_Thymus2.csv",
+      "sha256": "8540f5ad3f0fbcc5ec8e6f33b662d352ced2b3a78aa6bd4aa6b056873ef383b5"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Thymus3.npy",
+      "sha256": "a267e5df92f828e95e9c7faf0e784b5347c826bbafeb50e4abf6a2560ecf1aa7"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Mouse_Thymus3.csv",
+      "sha256": "f6f986a56dc95b4509912d58d4ca6ea0a7112d0971bc6fef63c556b062399296"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Mouse_Thymus4.npy",
+      "sha256": "b15e5c3feaa78f52b10f252698b805b2266893401033d792071b1568e755e953"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Mouse_Thymus4.csv",
+      "sha256": "7f170ea1a7f19e2a3644e4b5b3a1614ebef2f0acf464d74875ad3ec435874b57"
+    }
+  ],
+  "created_at": "2026-07-26T02:45:19.357120+08:00",
+  "plot_point_size_by_section": {
+    "Mouse_Thymus1": 8.0,
+    "Mouse_Thymus2": 5.0,
+    "Mouse_Thymus3": 5.0,
+    "Mouse_Thymus4": 5.0
+  },
+  "plot_dpi": 220,
+  "generation_script": "/home/hujinlan/spa_mo_model/scripts/compare_mouse_thymus_kmeans_preprocessing.py",
+  "generation_script_sha256": "bd3d26fe86fbcdb3bd9dfc4be190febadbd20cd2223fb80822d9e47797dc960a",
+  "figures_redrawn_at": "2026-07-26T18:38:28.960062+08:00",
+  "retained_clustering_k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "deleted_clustering_k_values": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "metrics_k_values_without_saved_label_directories": [
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    11
+  ],
+  "retained_k_metrics_and_figures_reuse_saved_labels": true,
+  "clustering_directories_pruned_at": "2026-07-26T18:38:59.563574+08:00"
+}

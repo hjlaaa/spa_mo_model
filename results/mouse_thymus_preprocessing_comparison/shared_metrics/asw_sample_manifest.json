@@ -1,0 +1,18 @@
+{
+  "sample_file": "/home/hujinlan/spa_mo_model/results/mouse_thymus_preprocessing_comparison/shared_metrics/asw_sample.csv",
+  "sha256": "00a6ede1cd4ca0d5a5d8af355561899d0cb1696745742e5ba887324e12db0c8e",
+  "n_obs": 10000,
+  "section_counts": {
+    "Mouse_Thymus1": 2635,
+    "Mouse_Thymus2": 2386,
+    "Mouse_Thymus3": 2607,
+    "Mouse_Thymus4": 2372
+  },
+  "seed": 0,
+  "identity_key": [
+    "section",
+    "obs_name"
+  ],
+  "selection": "section-proportional largest-remainder quotas; sorted candidates; numpy default_rng(seed=0) without replacement",
+  "shared_across_methods_preprocessing_k_and_modes": true
+}

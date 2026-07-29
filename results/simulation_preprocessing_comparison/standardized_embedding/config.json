@@ -1,0 +1,66 @@
+{
+  "dataset": "Simulation",
+  "method": "spa_mo_model",
+  "preprocessing": "standardized_embedding",
+  "kmeans_input": "standardized_final_embedding",
+  "metric_space": "standardized_final_embedding",
+  "joint_scaler_scope": "all_6480_spots",
+  "independent_scaler_scope": "fit_per_section",
+  "k_values": [
+    5,
+    8,
+    10,
+    12
+  ],
+  "seed": 42,
+  "n_init": 20,
+  "max_iter": 300,
+  "n_obs": 6480,
+  "embedding_dim": 128,
+  "spatial_neighbor_k": 6,
+  "point_size": 28.0,
+  "all_spots_used": true,
+  "data_dir": "/home/hujinlan/spa_mo_model/data/Simulation",
+  "source_files": [
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Simulation1.npy",
+      "sha256": "73bb133bbe1833600adafc23859a0ff7d0a2a45d2aac229d4a9c3c7c80c8b557"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Simulation1.csv",
+      "sha256": "c41437ca95542b703447f1ca86e2a95e8c61bbd96aaae8d14479e35d3069cd9b"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Simulation2.npy",
+      "sha256": "563cf33287e0a91018e49764b6e955b331cbb7876c158cfe280b12063022b157"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Simulation2.csv",
+      "sha256": "37504634ca4cda40af56d2d7d8a9988ec69d367f162c945ee45c5bec4656d782"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Simulation3.npy",
+      "sha256": "53478640a967092d3ae2edaef8323600405a38248d8a6cd65cad6b3bf3f59791"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Simulation3.csv",
+      "sha256": "a6def8b03c70fb8f71e9bfd20eb0aeafbd6823b31aa01a9b8cfa1dbf0da2b927"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Simulation4.npy",
+      "sha256": "c1c339e79ddd3a45c015e37375a79145f307d144dad29d5e31a87d2743fcd667"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Simulation4.csv",
+      "sha256": "94fb35015265ec5f0475112adb53e1f84b28b1aeaa05a6eeb7ae29d7b80166ea"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/final_embeddings_Simulation5.npy",
+      "sha256": "171b66aedf4493d6c246895eab64aa00829b1d70ccd8bd3d6f672611e54fe31d"
+    },
+    {
+      "path": "/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/obs_metadata_Simulation5.csv",
+      "sha256": "fafbac1046abd73f8e0c8e750fb9077c02da08a0c7bd4df5bd969590dff097d2"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-# spa_mo_model、MOFA+、COSIE、SpaMosaic 在 MouseBrain、CRC、MISAR-seq、Human_Lymph_Node、Mouse_Spleen 与 Mouse_Thymus 上的结果对比报告
+# spa_mo_model、MOFA+、COSIE、SpaMosaic 在 MouseBrain、CRC、MISAR-seq、Human_Lymph_Node、Mouse_Spleen、Mouse_Thymus、Simulation 与 spatch 上的结果对比报告
 
-生成时间：2026-07-01；MISAR-seq 结果更新于 2026-07-02；Human_Lymph_Node、Mouse_Spleen、Mouse_Thymus 及 spa_mo_model 公共指标更新于 2026-07-09。本文按照用户指定目录读取已有实验结果，并补算/汇总了 `spa_mo_model` 与 baseline 的聚类、空间连续性、section diagnostic 和 batch correction 指标；未修改原始数据集。
+生成时间：2026-07-01；MISAR-seq 结果更新于 2026-07-02；Mouse_Spleen、Mouse_Thymus 及 spa_mo_model 公共指标更新于 2026-07-09；Simulation 结果更新于 2026-07-23；spatch 结果更新于 2026-07-25；Human_Lymph_Node 四方法标准对齐结果更新于 2026-07-25。本文按照用户指定目录读取已有实验结果，并补算/汇总了 `spa_mo_model` 与 baseline 的聚类、空间连续性、section diagnostic 和 batch correction 指标；未修改原始数据集。
 
 ## 结果目录
 | 数据集                 | 方法           | 目录                                                                                                                                 |
@@ -29,6 +29,14 @@
 | Mouse_Thymus        | MOFA+        | /home/hujinlan/mofa+/analysis/mouse_thymus_mofa_hvg2000_k10_iter1000                                                             |
 | Mouse_Thymus        | COSIE        | /home/hujinlan/cosie_runs/mouse_thymus_cosie_rna_adt_full/analysis                                                               |
 | Mouse_Thymus        | SpaMosaic    | /home/hujinlan/SpaMosaic-dev/analysis/mouse_thymus_spamosaic                                                                     |
+| Simulation          | spa_mo_model | /home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis       |
+| Simulation          | MOFA+        | /home/hujinlan/mofa+/analysis/simulation_mofa_hvg1000_k10_iter1000                                                               |
+| Simulation          | COSIE        | /home/hujinlan/cosie_runs/simulation_cosie_rna_adt_full/analysis                                                                 |
+| Simulation          | SpaMosaic    | /home/hujinlan/SpaMosaic-dev/analysis/simulation_spamosaic                                                                       |
+| spatch              | spa_mo_model | /home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis                                          |
+| spatch              | MOFA+        | 未生成分析结果；失败记录：/home/hujinlan/mofa+/runs/spatch/run_failure.json                                                     |
+| spatch              | COSIE        | /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis                                                     |
+| spatch              | SpaMosaic    | 未生成分析结果；失败记录：/home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json                              |
 
 ## 指标解释与可比性说明
 
@@ -45,7 +53,7 @@
 
 四个方法的训练目标和配置不同：潜变量维度、HVG 数量、训练轮数、Harmony/metacell/OT/CE loss 等设置均不完全一致。因此这些表格适合做 baseline 级别横向参考，不应解释为严格受控的消融实验。
 
-Human_Lymph_Node、Mouse_Spleen 与 Mouse_Thymus 的原始 `obs` 不包含可靠细胞类型或组织区域真值，因此只报告无监督内部指标、空间连续性、section diagnostic 和 batch correction；不把 section ARI/NMI 误写成生物学聚类准确率。
+Human_Lymph_Node、Mouse_Spleen 与 Mouse_Thymus 的原始 `obs` 不包含可靠细胞类型或组织区域真值，因此只报告无监督内部指标、空间连续性、section diagnostic 和 batch correction；不把 section ARI/NMI 误写成生物学聚类准确率。Simulation 则有五类 `spatial_domain` 真值（background、sp1–sp4），因此额外报告外部聚类指标、模拟因子恢复和同网格跨切片检索。spatch 只对成功完成训练与分析的 spa_mo_model 和 COSIE 做数值对比；MOFA+ 与 SpaMosaic 仅记录资源不足导致的失败，不把缺失值纳入排名。
 
 ## MouseBrain
 
@@ -557,6 +565,8 @@ SpaMosaic 的 RNA/ATAC embedding cosine 在 ALL 上约为 0.0393，整体模态 
 
 两张切片共 6,843 个 spot。原始 RNA 使用唯一 `gene_ids` 对齐，删除两张切片均为零的 28 个基因后保留 18,057 个共同 RNA 特征；31 个 ADT 全部保留。该数据集没有可靠细胞类型真值，因此以下 ARI/NMI 仅指 section/group diagnostic，不作为生物学准确率。
 
+本轮已将四种方法的下游评估统一为：各自最终 embedding 经 `StandardScaler` 后输入 `sklearn.cluster.KMeans`；`random_state=0`、`n_init=20`、`max_iter=300`；joint 内部指标统一计算 `k=2–12`；空间图与 independent clustering 统一使用 `k=5/8/10/12`；ASW、CH、DBI 和 batch 指标均使用全量 6,843 个 spot；空间近邻数为 6。每个 joint k 只生成一份 labels，内部指标和空间图直接复用；independent labels 同时用于空间连续性与空间图。四种方法仍分别读取自己目录内的数据、embedding 和结果。
+
 ### Human_Lymph_Node 共同 k=5/8/10/12 的无监督指标
 
 ASW scaled 为 `(ASW raw + 1) / 2`；ASW 与 CH 越高越好，DBI 越低越好。section ARI/NMI 越接近零，说明聚类越不容易直接退化为切片标签。
@@ -565,57 +575,57 @@ ASW scaled：
 
 |  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
 | --: | -----------: | -----: | -----: | --------: |
-|  5 |       0.5345 | 0.6296 | 0.5835 |    0.5894 |
-|  8 |       0.5380 | 0.5710 | 0.5751 |    0.5826 |
-| 10 |       0.5363 | 0.5853 | 0.5682 |    0.5742 |
-| 12 |       0.5341 | 0.5810 | 0.5744 |    0.5728 |
+|  5 |       0.5489 | 0.6359 | 0.5924 |    0.5894 |
+|  8 |       0.5410 | 0.5850 | 0.5800 |    0.5830 |
+| 10 |       0.5405 | 0.5770 | 0.5808 |    0.5741 |
+| 12 |       0.5400 | 0.5813 | 0.5753 |    0.5754 |
 
 ASW raw：
 
 |  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
 | --: | -----------: | -----: | -----: | --------: |
-|  5 |       0.0691 | 0.2591 | 0.1670 |    0.1789 |
-|  8 |       0.0761 | 0.1419 | 0.1503 |    0.1651 |
-| 10 |       0.0727 | 0.1706 | 0.1365 |    0.1484 |
-| 12 |       0.0683 | 0.1620 | 0.1488 |    0.1457 |
+|  5 |       0.0978 | 0.2718 | 0.1847 |    0.1789 |
+|  8 |       0.0820 | 0.1699 | 0.1601 |    0.1659 |
+| 10 |       0.0810 | 0.1540 | 0.1616 |    0.1481 |
+| 12 |       0.0801 | 0.1626 | 0.1505 |    0.1508 |
 
 CH：
 
 |  k | spa_mo_model |    MOFA+ |     COSIE | SpaMosaic |
 | --: | -----------: | -------: | --------: | --------: |
-|  5 |     509.1603 | 856.0877 | 1135.2142 | 1754.4991 |
-|  8 |     384.3135 | 805.5118 |  950.3695 | 1332.1561 |
-| 10 |     325.5783 | 784.1474 |  821.6669 | 1155.7694 |
-| 12 |     293.5894 | 756.9036 |  738.3298 | 1028.0646 |
+|  5 |     527.4998 | 846.8471 | 1263.8206 | 1754.4991 |
+|  8 |     401.9315 | 838.1938 |  972.4262 | 1332.2144 |
+| 10 |     349.2461 | 793.0058 |  851.7784 | 1155.8133 |
+| 12 |     308.1397 | 756.8574 |  760.3958 | 1028.0960 |
 
 DBI：
 
 |  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
 | --: | -----------: | -----: | -----: | --------: |
-|  5 |       2.8074 | 1.4859 | 1.8580 |    1.7911 |
-|  8 |       3.1453 | 1.4851 | 2.0363 |    1.7389 |
-| 10 |       3.0325 | 1.4958 | 2.1245 |    1.8286 |
-| 12 |       3.1610 | 1.4467 | 2.0332 |    1.8489 |
+|  5 |       2.5429 | 1.4251 | 1.7425 |    1.7911 |
+|  8 |       2.7482 | 1.4357 | 1.9355 |    1.7371 |
+| 10 |       2.9238 | 1.3814 | 1.9147 |    1.8195 |
+| 12 |       2.8134 | 1.4460 | 2.0167 |    1.8047 |
 
 section ARI：
 
 |  k | spa_mo_model |   MOFA+ |   COSIE | SpaMosaic |
 | --: | -----------: | ------: | ------: | --------: |
-|  5 |       0.0001 |  0.0002 |  0.0027 |    0.0001 |
-|  8 |       0.0002 |  0.0033 |  0.0037 |    0.0000 |
-| 10 |       0.0000 |  0.0026 |  0.0032 |   -0.0001 |
-| 12 |       0.0004 |  0.0012 |  0.0030 |    0.0001 |
+|  5 |      -0.0000 |  0.0002 |  0.0026 |    0.0001 |
+|  8 |      -0.0000 |  0.0002 |  0.0026 |   -0.0001 |
+| 10 |      -0.0000 |  0.0019 |  0.0046 |   -0.0001 |
+| 12 |      -0.0000 |  0.0014 |  0.0036 |    0.0001 |
 
 section NMI：
 
 |  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
 | --: | -----------: | -----: | -----: | --------: |
-|  5 |       0.0005 | 0.0010 | 0.0024 |    0.0006 |
-|  8 |       0.0007 | 0.0034 | 0.0049 |    0.0005 |
-| 10 |       0.0005 | 0.0034 | 0.0063 |    0.0004 |
-| 12 |       0.0011 | 0.0024 | 0.0054 |    0.0008 |
+|  5 |       0.0007 | 0.0011 | 0.0025 |    0.0006 |
+|  8 |       0.0005 | 0.0017 | 0.0033 |    0.0005 |
+| 10 |       0.0005 | 0.0029 | 0.0055 |    0.0005 |
+| 12 |       0.0005 | 0.0026 | 0.0055 |    0.0008 |
 
-共同 k 上，MOFA+ 的 ASW/DBI 整体较强，SpaMosaic 的 CH 最高且 section diagnostic 最接近零；COSIE 居中。spa_mo_model 的 section ARI/NMI 很低，说明切片混合充分，但 ASW 较低、DBI 较高，内部簇几何分离较弱。
+共同 k 上，MOFA+ 的 ASW/DBI 整体较强，SpaMosaic 的 CH 最高且 section diagnostic 接近零；COSIE 的 CH 和空间连续性较高，但 section diagnostic 也略高。spa_mo_model 的 section ARI/NMI 最接近零，但内部簇几何分离仍弱于三个 baseline。
 
 ### Human_Lymph_Node 各方法报告 k 范围内最佳内部指标
 
@@ -623,7 +633,7 @@ section NMI：
 
 | 方法         | reported k                |
 | ------------ | ------------------------- |
-| spa_mo_model | 5/8/10/12                 |
+| spa_mo_model | 2/3/4/5/6/7/8/9/10/11/12 |
 | MOFA+        | 2/3/4/5/6/7/8/9/10/11/12 |
 | COSIE        | 2/3/4/5/6/7/8/9/10/11/12 |
 | SpaMosaic    | 2/3/4/5/6/7/8/9/10/11/12 |
@@ -632,12 +642,12 @@ section NMI：
 
 | 指标            |  spa_mo_model |          MOFA+ |           COSIE |       SpaMosaic |
 | --------------- | ------------: | -------------: | --------------: | --------------: |
-| best ASW scaled |  0.5380 (k=8) |   0.6436 (k=2) |    0.6024 (k=3) |    0.6327 (k=2) |
-| best DBI        |  2.8074 (k=5) |   1.3157 (k=7) |    1.6967 (k=3) |    1.4778 (k=3) |
-| best CH         | 509.1603 (k=5) | 920.1798 (k=2) | 1882.1533 (k=2) | 2687.4647 (k=2) |
-| max section ARI | 0.0004 (k=12) |   0.0033 (k=8) |    0.0039 (k=7) |    0.0001 (k=5) |
+| best ASW scaled |  0.5566 (k=3) |   0.6436 (k=2) |    0.6025 (k=3) |    0.6327 (k=2) |
+| best DBI        |  2.5407 (k=3) |  1.3814 (k=10) |    1.6905 (k=3) |    1.4773 (k=3) |
+| best CH         | 772.3736 (k=2) | 920.1798 (k=2) | 1882.5075 (k=2) | 2687.4647 (k=2) |
+| max section ARI |  0.0002 (k=3) |  0.0022 (k=11) |    0.0047 (k=9) |    0.0001 (k=5) |
 
-该表按各方法自己报告的 k 范围选值，不能替代同 k 对比。section ARI 的“最大值”仅用于检查最强 section 依赖，不代表越高越好。
+该表现在对四种方法使用完全相同的 `k=2–12` 搜索范围。section ARI 的“最大值”仅用于检查最强 section 依赖，不代表越高越好。
 
 ### Human_Lymph_Node 空间连续性
 
@@ -645,19 +655,19 @@ section NMI：
 
 |  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
 | --: | -----------: | -----: | -----: | --------: |
-|  5 |       0.6180 | 0.5162 | 0.7392 |    0.6994 |
-|  8 |       0.5346 | 0.4301 | 0.6643 |    0.6256 |
-| 10 |       0.4643 | 0.4191 | 0.6159 |    0.5830 |
-| 12 |       0.4183 | 0.3448 | 0.5934 |    0.5568 |
+|  5 |       0.6180 | 0.5131 | 0.7681 |    0.6991 |
+|  8 |       0.5346 | 0.4263 | 0.6577 |    0.6262 |
+| 10 |       0.4643 | 0.3735 | 0.6263 |    0.5825 |
+| 12 |       0.4183 | 0.3440 | 0.6001 |    0.5554 |
 
 联合聚类：
 
 |  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
 | --: | -----------: | -----: | -----: | --------: |
-|  5 |       0.6160 | 0.5137 | 0.7498 |    0.6987 |
-|  8 |       0.5138 | 0.3915 | 0.6609 |    0.6253 |
-| 10 |       0.4563 | 0.3680 | 0.5959 |    0.5818 |
-| 12 |       0.4184 | 0.3412 | 0.5845 |    0.5534 |
+|  5 |       0.6160 | 0.5180 | 0.7647 |    0.6987 |
+|  8 |       0.5138 | 0.4383 | 0.6580 |    0.6262 |
+| 10 |       0.4563 | 0.3824 | 0.6130 |    0.5815 |
+| 12 |       0.4184 | 0.3458 | 0.5760 |    0.5607 |
 
 COSIE 的空间连续性最高，SpaMosaic 次之，spa_mo_model 居中，MOFA+ 最低。结合内部指标看，COSIE/SpaMosaic 更平滑，但高连续性也可能包含过度平滑，不能单独解释为生物学准确率。
 
@@ -697,7 +707,7 @@ MOFA+ 的解释度主要集中于 ADT，RNA 的总解释度较低；该 R2 是�
 
 ### Human_Lymph_Node 小结
 
-综合看，SpaMosaic 的 batch mixing 和 CH 最强且 section diagnostic 最低；MOFA+ 的簇几何指标较好；COSIE 的空间连续性最好但 batch mixing 较弱；spa_mo_model 的 batch correction 接近 SpaMosaic，但内部簇几何分离和空间连续性不占优。由于没有细胞类型真值，不能据此判断哪种方法具有最高生物学注释准确率。
+统一标准后，SpaMosaic 的 batch mixing 和 CH 最强；MOFA+ 的 ASW/DBI 较好；COSIE 的空间连续性最高但 batch mixing 较弱；spa_mo_model 的 section mixing 很强，但内部簇几何分离和空间连续性不占优。由于没有细胞类型真值，不能据此判断哪种方法具有最高生物学注释准确率。
 
 ## Mouse_Spleen
 
@@ -1029,16 +1039,423 @@ MOFA+ 的解释度主要集中在 ADT（约 83.1%–94.2%），RNA 解释度仅�
 
 Mouse_Thymus 上，spa_mo_model 在共同 k 的 ASW 最高且空间连续性较强，但 section 依赖明显；SpaMosaic 的 CH 最高，并在各自 k 范围内取得最佳 ASW/DBI/CH，但这些最佳值集中在 section 依赖较强的低 k；COSIE 的空间连续性最高，但 batch mixing 最弱之一；MOFA+ 的 DBI 与所有 batch correction 指标最好，跨切片整合最充分，不过空间连续性和 ASW 较低。由于没有生物学真值标签，不能仅凭这些内部指标确定生物学聚类的最终优胜者。
 
+## Simulation
+
+### 结果目录
+
+| 方法         | 目录                                                                                                                         |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| spa_mo_model | /home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis |
+| MOFA+        | /home/hujinlan/mofa+/analysis/simulation_mofa_hvg1000_k10_iter1000                                                         |
+| COSIE        | /home/hujinlan/cosie_runs/simulation_cosie_rna_adt_full/analysis                                                           |
+| SpaMosaic    | /home/hujinlan/SpaMosaic-dev/analysis/simulation_spamosaic                                                                 |
+
+### 配置与数据适配摘要
+
+| 方法         | 主要设置                                                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| spa_mo_model | RNA/ADT；embedding 128 维；200 epoch；RNA HVG1000；100 ADT；bidirectional OT/attention；5 切片联合训练；seed42。                           |
+| MOFA+        | RNA/ADT 两个 view；10 factors；RNA HVG1000；100 ADT；最多 iter1000、实际约 71 次迭代收敛；5 个 group；CPU float64；seed1。               |
+| COSIE        | RNA/ADT（内部记为 Protein）；embedding 256 维；600 epoch；RNA HVG1000；Harmony；完整空间图与相邻切片同模态 linkage；seed8。              |
+| SpaMosaic    | RNA/ADT；`merged_emb` 32 维；100 epoch；RNA HVG1000；ADT CLR；radius cutoff=0.35；CE loss；Harmony GPU；seed1234。                        |
+
+Simulation1–Simulation5 每张切片各 1,296 个 spot，共 6,480 个；每张切片包含 1,000 个 RNA feature 和 100 个 ADT feature。主评价真值为 `spatial_domain`，包含 background、sp1、sp2、sp3、sp4 五类。四种方法均从各自 `data` 目录读取对应副本，表达矩阵使用 `.X`，没有错误替换为 `layers['counts']`；真值只在训练结束后的分析阶段载入。SpaMosaic 明确使用单数目录 `/home/hujinlan/SpaMosaic-dev/demo/data/Simulation`，没有使用另一个复数目录 `Simulations`。本数据集的聚类空间图单独使用 spot size 24，不影响其他数据集。
+
+本节已按统一口径重算：四种方法都先在各自完整最终 embedding/factor 上按维拟合 StandardScaler，再将 standardized embedding 输入 KMeans；统一使用 k=5/8/10/12、seed42、n_init20、max_iter300。ASW、CH、DBI 和 Label ASW 也在同一 standardized embedding 空间中计算。空间图、空间连续性和外部指标全部复用同一套 KMeans labels，不再二次聚类。每个 section 的 1,296 个 spot 及联合 6,480 个 spot 均为全量计算。
+
+### Simulation 共同 k 的空间域 ARI
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       0.4437 | 0.3643 | 0.9936 |    0.5590 |
+|  8 |       0.3800 | 0.5479 | 0.7358 |    0.6788 |
+| 10 |       0.3868 | 0.3738 | 0.6413 |    0.5817 |
+| 12 |       0.3799 | 0.3667 | 0.5920 |    0.5758 |
+
+### Simulation 共同 k 的空间域 NMI
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       0.5559 | 0.5055 | 0.9897 |    0.6908 |
+|  8 |       0.5505 | 0.7009 | 0.8680 |    0.7952 |
+| 10 |       0.5207 | 0.5746 | 0.8214 |    0.7634 |
+| 12 |       0.5225 | 0.5759 | 0.7918 |    0.7674 |
+
+### Simulation 共同 k 中最佳空间域外部指标
+
+下表按每种方法在共同 k=5/8/10/12 中 ARI 最高的行汇总；Homogeneity、Completeness、V-measure 和 Label ASW 均取同一行。
+
+| 方法         | best k |    ARI |    NMI | Homogeneity | Completeness | V-measure | Label ASW raw | Label ASW scaled |
+| ------------ | -----: | -----: | -----: | ----------: | -----------: | --------: | ------------: | ---------------: |
+| spa_mo_model |      5 | 0.4437 | 0.5559 |      0.5590 |       0.5529 |    0.5559 |        0.3466 |           0.6733 |
+| MOFA+        |      8 | 0.5479 | 0.7009 |      0.8050 |       0.6207 |    0.7009 |        0.1456 |           0.5728 |
+| COSIE        |      5 | 0.9936 | 0.9897 |      0.9902 |       0.9893 |    0.9897 |        0.4364 |           0.7182 |
+| SpaMosaic    |      8 | 0.6788 | 0.7952 |      0.9102 |       0.7060 |    0.7952 |        0.3458 |           0.6729 |
+
+在共同 k 中，COSIE 的最佳 ARI/NMI 显著最高，SpaMosaic 第二，MOFA+ 第三，spa_mo_model 第四。SpaMosaic 与 MOFA+ 的最佳 ARI 位于 k=8，spa_mo_model 与 COSIE 的最佳 ARI 位于与真值类别数一致的 k=5。
+
+### COSIE 高 ARI/NMI 复核
+
+COSIE 的 k=5 结果经过独立复核后可重复，并未发现样本顺序错位、指标实现错误或训练阶段直接使用 `spatial_domain` 标签：
+
+| 复核项                                            |    ARI |    NMI | 结论                                                  |
+| ------------------------------------------------- | -----: | -----: | ----------------------------------------------------- |
+| standardized 最终 256 维 embedding，seed42/n_init20/k=5 | 0.9936 | 0.9897 | 与正式分析 CSV 及空间图 labels 完全一致          |
+| RNA 侧前 128 维分别标准化                         | 0.9961 | 0.9937 | RNA 侧已几乎完全恢复空间域                            |
+| ADT 侧后 128 维分别标准化                         | 0.9393 | 0.9250 | ADT 侧也包含很强的空间域结构                          |
+| 保存 labels 与统一参数重新 KMeans                 | 1.0000 | 1.0000 | labels 逐点完全一致                                   |
+| 20 个随机种子的完整 256 维标准化结果              | 0.9936 | 0.9897 | ARI/NMI 的最小值、最大值和均值相同                    |
+| barcode 与 `spatial_domain` 真值对齐              |      — |      — | 5 个 section、6,480 个 spot 全部逐点通过              |
+
+Hungarian 匹配后只有 15/6,480 个 spot 与真值不一致。需要强调，这五张 Simulation 切片共享完全相同的空间网格、`spfac` 和空间域布局，而 COSIE 显式使用空间图并对最终表示做邻域聚合；再加上已知类别数 k=5，组合起来对 COSIE 非常有利。因此高分是真实可复现的本数据集结果，但不能外推成其在一般真实数据上的同等性能。
+
+### Simulation 共同 k 的无监督内部指标
+
+ASW scaled 为 `(ASW raw + 1) / 2`；ASW 与 CH 越高越好，DBI 越低越好。
+
+ASW scaled：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       0.6715 | 0.5862 | 0.7184 |    0.6753 |
+|  8 |       0.7185 | 0.6024 | 0.7123 |    0.7044 |
+| 10 |       0.7357 | 0.6095 | 0.6745 |    0.6730 |
+| 12 |       0.7450 | 0.6284 | 0.6676 |    0.6817 |
+
+ASW raw：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       0.3430 | 0.1723 | 0.4367 |    0.3506 |
+|  8 |       0.4371 | 0.2048 | 0.4246 |    0.4088 |
+| 10 |       0.4715 | 0.2190 | 0.3490 |    0.3459 |
+| 12 |       0.4900 | 0.2567 | 0.3351 |    0.3634 |
+
+CH：
+
+|  k | spa_mo_model |    MOFA+ |     COSIE | SpaMosaic |
+| --: | -----------: | -------: | --------: | --------: |
+|  5 |    1547.1149 | 728.5088 | 3239.6548 | 2823.3047 |
+|  8 |    2210.6932 | 720.8682 | 2858.1787 | 2657.2270 |
+| 10 |    2191.4295 | 729.8282 | 2498.3677 | 2409.4406 |
+| 12 |    2185.1643 | 751.1968 | 2321.5536 | 2267.6447 |
+
+DBI：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       1.3957 | 1.9645 | 1.0999 |    1.3410 |
+|  8 |       0.9394 | 1.5937 | 1.1168 |    0.9993 |
+| 10 |       1.0468 | 1.4278 | 1.2734 |    1.1613 |
+| 12 |       1.0255 | 1.3628 | 1.2327 |    1.1229 |
+
+共同 k 中，spa_mo_model 在 k=8/10/12 的 ASW 与 DBI 上最好；COSIE 在 k=5 的 ASW、CH 和 DBI 最好，并在全部共同 k 的 CH 上最高；SpaMosaic 多数 k 的 ASW/DBI 位于中间，MOFA+ 的内部簇分离整体最弱。
+
+### Simulation section 依赖诊断
+
+表中每格为 `section ARI / section NMI`。所有值都接近零，说明四种 embedding 的联合聚类都没有退化成五张切片的身份标签。
+
+|  k | spa_mo_model       | MOFA+              | COSIE              | SpaMosaic          |
+| --: | -----------------: | -----------------: | -----------------: | -----------------: |
+|  5 | -0.0006 / 0.000001 | -0.0006 / 0.000002 | -0.0006 / 0.000003 | -0.0006 / 0.000008 |
+|  8 | -0.0007 / 0.000005 | -0.0007 / 0.000014 | -0.0007 / 0.000138 | -0.0007 / 0.000033 |
+| 10 | -0.0008 / 0.000011 | -0.0008 / 0.000015 | -0.0007 / 0.000149 | -0.0008 / 0.000047 |
+| 12 | -0.0009 / 0.000010 | -0.0009 / 0.000007 | -0.0007 / 0.000149 | -0.0008 / 0.000061 |
+
+### Simulation 空间连续性
+
+分切片独立聚类：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       0.6130 | 0.5062 | 0.9148 |    0.6735 |
+|  8 |       0.4041 | 0.4229 | 0.7342 |    0.6277 |
+| 10 |       0.3715 | 0.3447 | 0.6457 |    0.5171 |
+| 12 |       0.3314 | 0.3043 | 0.5706 |    0.4620 |
+
+联合聚类：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | --------: |
+|  5 |       0.6588 | 0.4914 | 0.9150 |    0.6575 |
+|  8 |       0.4058 | 0.4918 | 0.7349 |    0.6313 |
+| 10 |       0.3703 | 0.3463 | 0.6291 |    0.5242 |
+| 12 |       0.3300 | 0.3195 | 0.5776 |    0.4893 |
+
+COSIE 在所有共同 k 与两种聚类模式下的空间连续性均最高，SpaMosaic 通常第二。COSIE 的优势与其空间图和邻域聚合机制一致，但也需结合前述共享空间模板的模拟设计解读。
+
+### Simulation Batch Correction Metrics
+
+| 指标           | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| -------------- | -----------: | -----: | -----: | --------: |
+| batch key      |      section |  group |  group |     group |
+| n used         |         6480 |   6480 |   6480 |      6480 |
+| bASW           |       0.9988 | 0.9659 | 0.9979 |    0.9981 |
+| bLISI          |       0.9767 | 0.9567 | 0.9798 |    0.9549 |
+| kBET           |       0.9867 | 0.9381 | 0.9776 |    0.9369 |
+| kBET rejection |       0.0133 | 0.0619 | 0.0224 |    0.0631 |
+| PCR score      |       1.0000 | 1.0000 | 0.9996 |    1.0000 |
+| PCR batch R2   |       0.0000 | 0.0000 | 0.0004 |    0.0000 |
+
+spa_mo_model 的 bASW 与 kBET 最好，COSIE 的 bLISI 最好；四种方法的 PCR score 都接近 1。结合 section ARI/NMI 可见，五张切片在四种 embedding 中均已充分混合。
+
+### Simulation 模拟因子恢复与 nuisance 泄漏
+
+数值是 cross-validation 的 variance-weighted linear R2。`spfac recovery` 越高越好；RNA/ADT `nsfac leakage` 越低越好。
+
+| 诊断项             | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic | 方向       |
+| ------------------ | -----------: | -----: | -----: | --------: | ---------- |
+| spfac recovery     |       0.9833 | 0.8347 | 0.9784 |    0.9390 | 越高越好   |
+| RNA nsfac leakage  |       0.9784 | 0.7279 | 0.8361 |    0.8354 | 越低越好   |
+| ADT nsfac leakage  |       0.9592 | 0.9048 | 0.7707 |    0.8030 | 越低越好   |
+
+spa_mo_model 与 COSIE 的空间因子恢复最高；但 spa_mo_model 同时保留了最多 RNA/ADT nuisance 信息。MOFA+ 的 RNA nuisance 泄漏最低，COSIE 的 ADT nuisance 泄漏最低。该表揭示了“恢复空间信号”和“去除模态特异噪声”之间的权衡，不能只看第一行。
+
+### Simulation 相邻切片同网格 spot 检索
+
+四对相邻切片取均值；Top-1 与 Recall@5 越高越好，FOSCTTM 越低越好。
+
+| 方法         | Top-1 accuracy | Recall@5 | Mean FOSCTTM |
+| ------------ | -------------: | -------: | ------------: |
+| spa_mo_model |         0.1582 |   0.3895 |        0.0190 |
+| MOFA+        |         0.0395 |   0.1597 |        0.0267 |
+| COSIE        |         0.7610 |   0.9184 |        0.0014 |
+| SpaMosaic    |         0.0897 |   0.2772 |        0.0222 |
+
+COSIE 的同位置跨切片检索显著最好，这与其接近完美的空间域聚类及五张切片共享网格/空间模板一致；spa_mo_model 第二，SpaMosaic 第三，MOFA+ 第四。
+
+### MOFA+ Simulation 视图解释度 R2
+
+| View | Group       |      R2 |
+| ---- | ----------- | ------: |
+| ADT  | Simulation1 | 77.2002 |
+| ADT  | Simulation2 | 73.9427 |
+| ADT  | Simulation3 | 71.1125 |
+| ADT  | Simulation4 | 68.5937 |
+| ADT  | Simulation5 | 66.4350 |
+| RNA  | Simulation1 | 19.8822 |
+| RNA  | Simulation2 | 16.7121 |
+| RNA  | Simulation3 | 14.4279 |
+| RNA  | Simulation4 | 12.4533 |
+| RNA  | Simulation5 | 10.8658 |
+
+MOFA+ 的总解释度在 ADT 上约为 66.4%–77.2%，在 RNA 上约为 10.9%–19.9%，且两种 view 都从 Simulation1 到 Simulation5 递减。
+
+### SpaMosaic Simulation 模态对齐
+
+| group       | n_spots | ADT-RNA cosine mean | median |    std |
+| ----------- | ------: | ------------------: | -----: | -----: |
+| ALL         |    6480 |              0.1245 | 0.1265 | 0.0144 |
+| Simulation1 |    1296 |              0.1251 | 0.1273 | 0.0140 |
+| Simulation2 |    1296 |              0.1248 | 0.1265 | 0.0140 |
+| Simulation3 |    1296 |              0.1246 | 0.1266 | 0.0143 |
+| Simulation4 |    1296 |              0.1240 | 0.1259 | 0.0146 |
+| Simulation5 |    1296 |              0.1240 | 0.1261 | 0.0148 |
+
+### Simulation 小结
+
+Simulation 上，COSIE 在 k=5 的空间域 ARI/NMI、空间连续性、跨切片同位置检索和 ADT nuisance 抑制方面最好；其高分已通过多项独立检查，但受到五张切片共享完全相同空间模板、显式空间图和已知 k=5 的共同促进，不能直接外推到真实数据。SpaMosaic 的最佳空间域 ARI/NMI 位居第二，并在 k=8 达峰；spa_mo_model 的空间因子恢复、batch mixing 和较高 k 的内部 ASW 很强，但 nuisance 泄漏最明显；MOFA+ 的聚类与检索较弱，不过 RNA nuisance 泄漏最低，且因子模型提供了独立的 view/group 解释度。
+
+## spatch
+
+### 运行状态与结果目录
+
+| 方法         | 状态 | 结果或失败记录                                                                                                            |
+| ------------ | ---- | ------------------------------------------------------------------------------------------------------------------------- |
+| spa_mo_model | 成功 | /home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis                                  |
+| COSIE        | 成功 | /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis                                             |
+| MOFA+        | 失败 | /home/hujinlan/mofa+/runs/spatch/run_failure.json                                                                        |
+| SpaMosaic    | 失败 | /home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json                                                 |
+
+本节的数值表格只比较成功完成训练和分析的 spa_mo_model 与 COSIE。MOFA+ 和 SpaMosaic 没有最终 embedding 或分析结果，因此不以空值参加对比，也不纳入优劣排序。
+
+### 配置与数据适配摘要
+
+| 方法         | 主要设置                                                                                                                                                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| spa_mo_model | RNA/Protein/HE 三模态；1,068,962 个 full spot；section1=665,399、section2=403,563；无空间块聚合；128 维 embedding；200 epoch；RNA HVG3000；Harmony；bidirectional OT/attention；BF16；seed42；RTX 4090。 |
+| COSIE        | RNA/Protein/HE 三模态；完整 1,068,962 spot 输入与输出；仅本方法使用 metacell+6×6 子图方案，内部训练节点为 section1=189,649、section2=134,518；384 维 embedding；600 epoch；Harmony；seed42；RTX 4090。 |
+
+两个成功方法都从各自项目的 `data/spatch` 读取数据，没有跨方法引用数据目录。两个 section 的 Protein 均从 17 个原始通道中剔除 DAPI，之后保留 16 个通道；预处理后 Protein 表征为 15 维。两者均未使用 4×4 空间块聚合。spa_mo_model 仅优化了延迟加载 HE、顺序预处理和避免重复 AnnData 等内存路径，`run_summary.json` 明确记录模型逻辑未改变。
+
+本次统一重算后，两个方法都直接将最终模型输出的原始 embedding 输入 MiniBatchKMeans；KMeans 参数均为 k=2–20、seed42、n_init20、batch size4096、max_iter300。距离类评价统一在各自完整 embedding 上拟合 StandardScaler：Cluster ASW 与 Label ASW 均由 sklearn 使用 random_state=42 抽取相同位置的 10,000 个 spot；CH/DBI 均使用完整 1,068,962 个 spot；batch 指标均使用相同位置的 100,000 个 spot，其中 bASW 再抽取相同位置的 10,000 个。COSIE 也已补齐 k=20 的 joint/independent 空间结果；两个方法保留 k=5/8/10/12/16/20 的空间图均使用对应 section 的全部 spot 绘制。
+
+### 资源不足方法记录
+
+| 方法      | 失败阶段                         | 资源错误摘要                                                                                                            | 后续处理                                  |
+| --------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| MOFA+     | 初始 ELBO 后第一次 W 更新        | 24 GB RTX 4090 上 CuPy 已分配约 15.97 GiB，继续申请约 7.96 GiB 时 OOM                                                   | 未切换 CPU；未生成模型；未开始分析        |
+| SpaMosaic | GPU 训练 epoch 0/100             | full-spot 三模态训练中本进程已占约 22.54 GiB，另有约 1.01 GiB 外部占用，仅余 4.19 MiB；再申请 36 MiB 时 CUDA OOM       | 未切换 CPU、采样或空间聚合；未生成 embedding |
+
+SpaMosaic 的 22.54 GiB 只是 OOM 时点的已用显存，不是可完成训练的最终峰值；该次运行尚未完成第一个 epoch 的反向传播。因此这里把两个方法记为“计算资源不足、无可比较结果”，而不是记为数值表现较差。
+
+### spatch 外部聚类指标：按 ARI 选择 best k
+
+两个方法都对联合 embedding 扫描 k=2–20，并在每个标签内按 ARI 选择 best k。`cell_type_common` 覆盖两个 section 的 956,139 个有效标签（16 类）；`spatial_cluster` 仅在 section2 有 344,594 个有效标签（8 类）；`codex_coarse_label` 仅在 section1 有 665,399 个有效标签（10 类）。Cluster/Label ASW scaled 均为 `(raw + 1) / 2`。
+
+| 标签               | 方法         | best k |    ARI |    NMI | Homogeneity | Completeness | V-measure | Cluster ASW raw | Cluster ASW scaled | Label ASW raw | Label ASW scaled |
+| ------------------ | ------------ | -----: | -----: | -----: | ----------: | -----------: | --------: | --------------: | -----------------: | ------------: | ---------------: |
+| cell_type_common   | spa_mo_model |      3 | 0.5786 | 0.4020 |      0.3337 |       0.5055 |    0.4020 |          0.0968 |             0.5484 |        0.0247 |           0.5123 |
+| cell_type_common   | COSIE        |      4 | 0.5433 | 0.3839 |      0.3406 |       0.4398 |    0.3839 |          0.1609 |             0.5804 |        0.0660 |           0.5330 |
+| spatial_cluster    | spa_mo_model |      5 | 0.3301 | 0.4439 |      0.3928 |       0.5103 |    0.4439 |          0.0945 |             0.5472 |        0.0608 |           0.5304 |
+| spatial_cluster    | COSIE        |      9 | 0.4422 | 0.5588 |      0.5493 |       0.5686 |    0.5588 |          0.1188 |             0.5594 |        0.0749 |           0.5374 |
+| codex_coarse_label | spa_mo_model |      3 | 0.2555 | 0.1539 |      0.1277 |       0.1938 |    0.1539 |          0.0968 |             0.5484 |       -0.0066 |           0.4967 |
+| codex_coarse_label | COSIE        |      4 | 0.2782 | 0.1840 |      0.1620 |       0.2130 |    0.1840 |          0.1609 |             0.5804 |        0.0070 |           0.5035 |
+
+spa_mo_model 在 `cell_type_common` 的 best ARI/NMI 更高；COSIE 在 `spatial_cluster` 和 `codex_coarse_label` 的 ARI/NMI 更高，并且三个标签对应行的 Label ASW 都更高。三个标签的覆盖范围不同，不能把不同标签之间的绝对分数直接视为同一任务。
+
+### spatch 共同 k=5/8/10/12/16/20 的无监督内部指标
+
+两者都保留 k=2–20 的联合聚类数值，因此共同表使用 k=5/8/10/12/16/20。ASW 使用 sklearn 从相同 spot 顺序按 random_state=42 抽取的 10,000 spot；CH/DBI 均使用完整 1,068,962 spot。三个指标都在各自完整 embedding 拟合的 StandardScaler 空间中评价。
+
+ASW scaled：
+
+|  k | spa_mo_model |  COSIE |
+| --: | -----------: | -----: |
+|  5 |       0.5472 | 0.5553 |
+|  8 |       0.5538 | 0.5552 |
+| 10 |       0.5627 | 0.5506 |
+| 12 |       0.5603 | 0.5492 |
+| 16 |       0.5642 | 0.5426 |
+| 20 |       0.5624 | 0.5410 |
+
+ASW raw：
+
+|  k | spa_mo_model |  COSIE |
+| --: | -----------: | -----: |
+|  5 |       0.0945 | 0.1106 |
+|  8 |       0.1076 | 0.1103 |
+| 10 |       0.1255 | 0.1012 |
+| 12 |       0.1205 | 0.0985 |
+| 16 |       0.1283 | 0.0852 |
+| 20 |       0.1247 | 0.0821 |
+
+CH：
+
+|  k | spa_mo_model（n=1,068,962） | COSIE（n=1,068,962） |
+| --: | --------------------------: | -------------------: |
+|  5 |                  81370.5237 |          125180.5170 |
+|  8 |                  68146.3196 |           89829.0336 |
+| 10 |                  67823.9711 |           80650.9575 |
+| 12 |                  61453.0599 |           69450.4001 |
+| 16 |                  55131.7233 |           56475.5695 |
+| 20 |                  49334.7239 |           48113.8362 |
+
+DBI：
+
+|  k | spa_mo_model（n=1,068,962） | COSIE（n=1,068,962） |
+| --: | --------------------------: | -------------------: |
+|  5 |                     2.7910 |               2.6081 |
+|  8 |                     2.5013 |               2.6404 |
+| 10 |                     2.1518 |               2.7315 |
+| 12 |                     2.1882 |               2.7907 |
+| 16 |                     2.1541 |               2.8175 |
+| 20 |                     2.1283 |               2.7695 |
+
+section ARI diagnostic：
+
+|  k | spa_mo_model |   COSIE |
+| --: | -----------: | ------: |
+|  5 |       0.0009 | 0.0024 |
+|  8 |       0.0033 | 0.0238 |
+| 10 |       0.0147 | 0.0050 |
+| 12 |       0.0084 | 0.0161 |
+| 16 |       0.0157 | 0.0188 |
+| 20 |       0.0125 | 0.0115 |
+
+section NMI diagnostic：
+
+|  k | spa_mo_model |  COSIE |
+| --: | -----------: | -----: |
+|  5 |       0.0014 | 0.0026 |
+|  8 |       0.0065 | 0.0591 |
+| 10 |       0.0360 | 0.0116 |
+| 12 |       0.0154 | 0.0388 |
+| 16 |       0.0438 | 0.0619 |
+| 20 |       0.0443 | 0.0343 |
+
+共同 k 上，COSIE 在 k=5/8 的 ASW 略高，spa_mo_model 在 k=10/12/16/20 更高。两者的 section ARI/NMI 整体都很低，未见聚类被 section 标签直接主导；较高 k 下仍有少量 section 关联结构。
+
+### spatch 各方法报告 k 范围内最佳内部指标
+
+两种方法都扫描 k=2–20。ASW scaled 仍按 `(raw + 1) / 2` 计算；CH/DBI 均为全量同口径。
+
+| 指标            | spa_mo_model       | COSIE                |
+| --------------- | ------------------ | -------------------- |
+| best ASW scaled | 0.5654（k=19）     | 0.5864（k=2）        |
+| best ASW raw    | 0.1307（k=19）     | 0.1727（k=2）        |
+| best DBI        | 2.0864（k=19）     | 2.0585（k=2）        |
+| best CH         | 135263.3034（k=2） | 238969.5396（k=2）   |
+| max section ARI | 0.0157（k=16）     | 0.0238（k=8）        |
+| max section NMI | 0.0443（k=20）     | 0.0724（k=19）       |
+
+COSIE 的全范围 best ASW 出现在 k=2，而 spa_mo_model 出现在 k=19；低 k 往往更容易取得较高 silhouette，因此该“best”表必须与共同 k 表一起解释。CH/DBI 现在可以按相同样本口径比较，但仍会受到最终 embedding 维度和几何结构差异影响。
+
+### spatch 空间连续性
+
+空间连续性为两个 section 的空间近邻同簇比例算术平均。两个方法现在都生成并保留 k=5/8/10/12/16/20，因此六个 k 均可对比。
+
+分 section 独立聚类：
+
+|  k | spa_mo_model |  COSIE |
+| --: | -----------: | -----: |
+|  5 |       0.8626 | 0.9422 |
+|  8 |       0.8192 | 0.9173 |
+| 10 |       0.7997 | 0.9087 |
+| 12 |       0.7530 | 0.8891 |
+| 16 |       0.7072 | 0.8718 |
+| 20 |       0.6540 | 0.8647 |
+
+联合聚类：
+
+|  k | spa_mo_model |  COSIE |
+| --: | -----------: | -----: |
+|  5 |       0.8477 | 0.9327 |
+|  8 |       0.7257 | 0.9126 |
+| 10 |       0.7515 | 0.8878 |
+| 12 |       0.7325 | 0.8878 |
+| 16 |       0.6983 | 0.8674 |
+| 20 |       0.6562 | 0.8530 |
+
+COSIE 在全部共同 k、joint 和 independent 两种模式下的空间连续性都更高。该结果与 COSIE 显式空间图和 metacell+6×6 训练设置有关；空间连续性高表示区域更平滑，但不能单独等价为生物学聚类更准确。
+
+### spatch Batch Correction Metrics
+
+| 方法         | batch_key | n_used | kNN backend   |  bASW | bASW n |  bLISI |   kBET | kBET rejection | PCR_score | PCR_batch_R2 |
+| ------------ | --------- | -----: | ------------- | -----: | -----: | -----: | -----: | --------------: | --------: | -----------: |
+| spa_mo_model | section   | 100000 | sklearn_exact | 0.9912 |  10000 | 0.3595 | 0.1595 |          0.8405 |    0.9930 |       0.0070 |
+| COSIE        | group     | 100000 | sklearn_exact | 0.9933 |  10000 | 0.2380 | 0.0588 |          0.9412 |    0.9944 |       0.0056 |
+
+两者现在使用相同位置的 100,000 个 spot，bASW 内部也使用相同位置的 10,000 个 spot。两者 bASW 和 PCR_score 都接近 1；spa_mo_model 的 bLISI 与 kBET 更高，说明局部邻域 section mixing 更好；COSIE 的 bASW/PCR_score 略高。
+
+### spatch 统一后仍存在的差异
+
+| 差异 | 影响大小 | 影响说明 |
+| ---- | -------- | -------- |
+| spa_mo_model 为128维 embedding，COSIE为384维 | 中到大 | 即使逐维标准化，维度仍会影响欧氏距离集中、ASW、CH、DBI、kNN batch指标和KMeans几何；这是最终模型输出差异，不是评价脚本口径错误。 |
+| spa_mo_model按原方法使用full-spot训练；COSIE按用户指定使用metacell+6×6 | 大 | 会直接改变表示的局部平滑程度，尤其可能提高COSIE的空间连续性；属于实验配置差异，不能由统一分析消除。 |
+| 两种模型的目标函数、网络结构和训练轮数不同（200 vs 600） | 大 | 这是要比较的方法本身，影响所有下游指标，但不属于分析不公平。 |
+| 原始embedding直接用于KMeans，而不同模型输出轴的方差尺度不同 | 中到大 | 当前两边规则已一致，但KMeans不具尺度不变性；这是用户指定“使用原始embedding”的必然影响。距离评价仍统一使用全量StandardScaler空间。 |
+| batch列名分别为`section`和`group` | 无 | 两列的内容、顺序和类别完全相同，都是section1/section2；只是字段名不同。 |
+
+除以上方法固有差异外，本轮用于数值表格的spot、标签、顺序、KMeans参数、抽样位置、标准化范围、CH/DBI样本量、空间近邻参数及batch抽样均已统一，保留k的空间图也都改为全量spot。当前仍只使用单一seed42，未评价随机种子方差；这对两种方法的影响相同，但会限制结论的统计稳健性。
+
+### spatch 小结
+
+spatch 上只对成功的 spa_mo_model 和 COSIE 下结论。spa_mo_model 在 `cell_type_common` 的 best ARI/NMI、更高 k 的共同 ASW，以及 bLISI/kBET 上占优；COSIE 在 `spatial_cluster`、`codex_coarse_label` 的外部聚类指标和所有共同 k 的空间连续性上占优。两者的 section diagnostic 均较低，bASW/PCR 也都显示全局 section 可分性不强。MOFA+ 在第一次 GPU W 更新时因 CuPy OOM 失败，SpaMosaic 在 epoch 0 因 CUDA OOM 失败，二者没有结果可供公平对比。
+
 ## 综合结论
 
 1. MouseBrain：spa_mo_model 在本次补算的 ARI/NMI/Label ASW 上整体最好，并且保持较高空间连续性；COSIE 次之，SpaMosaic 的 Cluster ASW 很高，MOFA+ 相对较低。
 2. CRC：COSIE 在共同 k=8/10 的 ASW scaled 和空间连续性上最好，但 section/group 相关性也更强；SpaMosaic 的最佳 ASW/CH 表现较好；spa_mo_model 在当前 fullspot 运行中无监督内部指标不占优，空间连续性处于中等；MOFA+ 稳定但整体不突出。
 3. MISAR-seq：SpaMosaic 在共同 k 的 ASW、bLISI/kBET 和 batch mixing 上最强；COSIE 的空间连续性最高但 batch effect 诊断较弱；spa_mo_model 在 RNA_Clusters ARI 和空间连续性上有亮点，但内部簇几何和 batch mixing 不占优；MOFA+ 解释度主要集中在 ATAC view。
-4. Human_Lymph_Node：SpaMosaic 的 batch mixing 与 CH 最强，MOFA+ 的簇几何指标较好，COSIE 的空间连续性最高，spa_mo_model 的 batch correction 很强但内部簇分离较弱。
+4. Human_Lymph_Node（已统一下游标准）：SpaMosaic 的 batch mixing 与 CH 最强，MOFA+ 的 ASW/DBI 较好，COSIE 的空间连续性最高，spa_mo_model 的 section mixing 很强但内部簇分离较弱。
 5. Mouse_Spleen：spa_mo_model 的 batch correction 最强；SpaMosaic 的 ASW/CH 最强；COSIE 的空间连续性最高但 batch mixing 最弱；MOFA+ 的 DBI/PCR 指标较好。
 6. Mouse_Thymus：spa_mo_model 的共同 k ASW 较高，SpaMosaic 的 CH 较高，COSIE 的空间连续性最高；但三者都保留明显 section 结构。MOFA+ 的 DBI 和 batch correction 最好，跨切片整合最充分。
-7. 由于配置差异很大，尤其 COSIE 使用 Harmony/不同图训练设置，spa_mo_model 使用 fullspot OT/attention，SpaMosaic 使用原方法 ATAC/LSI 与 CE loss，MOFA+ 是因子模型，这些结果更适合作为 baseline 观察，不适合直接作为最终胜负判断。
-8. 如果要进一步做严格比较，建议统一 k 列表、KMeans random seed/n_init、embedding 标准化、ASW sample size，并在每个数据集上明确 batch key 与主要生物标签的优先级。
+7. Simulation：COSIE 的空间域 ARI/NMI、空间连续性和跨切片同位置检索显著最好，SpaMosaic 的外部聚类指标第二；spa_mo_model 的空间因子恢复和 batch mixing 很强但 nuisance 泄漏明显；MOFA+ 的 RNA nuisance 泄漏最低。COSIE 的高分已复核无计算或标签泄漏错误，但高度受共享空间模板、空间图和 k=5 设置影响。
+8. spatch：只比较成功运行的 spa_mo_model 与 COSIE。spa_mo_model 在 `cell_type_common`、较高 k 的 ASW 和局部 batch mixing 上更好；COSIE 在 `spatial_cluster`、`codex_coarse_label` 和空间连续性上更好。MOFA+ 与 SpaMosaic 均因 24 GB RTX 4090 显存不足而没有可比较结果。
+9. 由于配置差异很大，尤其 COSIE 使用 Harmony/不同图训练设置，spa_mo_model 使用 fullspot OT/attention，SpaMosaic 使用原方法模态预处理与 CE loss，MOFA+ 是因子模型，这些结果更适合作为 baseline 观察，不适合直接作为最终胜负判断。
+10. 如果要进一步做严格比较，建议统一 k 列表、KMeans random seed/n_init、embedding 标准化、ASW sample size，并在每个数据集上明确 batch key 与主要生物标签的优先级。
 
 ## 派生文件
 
@@ -1055,6 +1472,14 @@ Mouse_Thymus 上，spa_mo_model 在共同 k 的 ASW 最高且空间连续性较�
 - spa_mo_model Human_Lymph_Node 公共指标与摘要：`/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics`；`/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/SUMMARY.md`
 - spa_mo_model Mouse_Spleen 公共指标与摘要：`/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics`；`/home/hujinlan/spa_mo_model/results/mouse_spleen/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/SUMMARY.md`
 - spa_mo_model Mouse_Thymus 公共指标与摘要：`/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics`；`/home/hujinlan/spa_mo_model/results/mouse_thymus/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/SUMMARY.md`
+- spa_mo_model Simulation 公共指标与摘要：`/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics`；`/home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/SUMMARY.md`
+- MOFA+ Simulation 分析摘要：`/home/hujinlan/mofa+/analysis/simulation_mofa_hvg1000_k10_iter1000/SUMMARY.md`
+- COSIE Simulation 分析摘要：`/home/hujinlan/cosie_runs/simulation_cosie_rna_adt_full/analysis/SUMMARY.md`
+- SpaMosaic Simulation 分析摘要：`/home/hujinlan/SpaMosaic-dev/analysis/simulation_spamosaic/SUMMARY.md`
+- spa_mo_model spatch 公共指标与摘要：`/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/metrics`；`/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/SUMMARY.md`
+- COSIE spatch 指标与摘要：`/home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/metrics`；`/home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/SUMMARY.md`
+- MOFA+ spatch GPU OOM 记录：`/home/hujinlan/mofa+/runs/spatch/run_failure.json`
+- SpaMosaic spatch GPU OOM 记录：`/home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json`
 
 ## 指标来源补充
 
@@ -1084,6 +1509,14 @@ Mouse_Thymus 上，spa_mo_model 在共同 k 的 ASW 最高且空间连续性较�
 | Mouse_Thymus | MOFA+ | /home/hujinlan/mofa+/analysis/mouse_thymus_mofa_hvg2000_k10_iter1000/metrics |
 | Mouse_Thymus | COSIE | /home/hujinlan/cosie_runs/mouse_thymus_cosie_rna_adt_full/analysis/metrics |
 | Mouse_Thymus | SpaMosaic | /home/hujinlan/SpaMosaic-dev/analysis/mouse_thymus_spamosaic/metrics |
+| Simulation | spa_mo_model | /home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics; /home/hujinlan/spa_mo_model/results/simulation/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/clustering_metrics.csv |
+| Simulation | MOFA+ | /home/hujinlan/mofa+/analysis/simulation_mofa_hvg1000_k10_iter1000/metrics |
+| Simulation | COSIE | /home/hujinlan/cosie_runs/simulation_cosie_rna_adt_full/analysis/metrics |
+| Simulation | SpaMosaic | /home/hujinlan/SpaMosaic-dev/analysis/simulation_spamosaic/metrics |
+| spatch | spa_mo_model | /home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/clustering_metrics.csv; /home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/metrics |
+| spatch | MOFA+ | 无指标；失败记录：/home/hujinlan/mofa+/runs/spatch/run_failure.json |
+| spatch | COSIE | /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/metrics; /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/clustering |
+| spatch | SpaMosaic | 无指标；失败记录：/home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json |
 
 ## Batch Correction Metrics
 
@@ -1152,5 +1585,27 @@ Mouse_Spleen 中 spa_mo_model 的 bASW、bLISI、kBET 最好，SpaMosaic 第二�
 | SpaMosaic    | group     |  17824 | sklearn_exact | 0.9057 |  10000 | 0.4714 | 0.0029 |          0.9971 |    0.6652 |       0.3348 |
 
 Mouse_Thymus 中 MOFA+ 的 bASW、bLISI、kBET 和 PCR_score 均最好，跨切片混合最充分。
+
+### Simulation Batch Metrics
+
+| 方法         | batch_key | n_used | kNN backend   | bASW   | bASW n | bLISI  | kBET   | kBET rejection | PCR_score | PCR_batch_R2 |
+| ------------ | --------- | -----: | ------------- | -----: | -----: | -----: | -----: | --------------: | --------: | -----------: |
+| spa_mo_model | section   |   6480 | sklearn_exact | 0.9988 |   6480 | 0.9767 | 0.9867 |          0.0133 |    1.0000 |       0.0000 |
+| MOFA+        | group     |   6480 | sklearn_exact | 0.9659 |   6480 | 0.9567 | 0.9381 |          0.0619 |    1.0000 |       0.0000 |
+| COSIE        | group     |   6480 | sklearn_exact | 0.9979 |   6480 | 0.9798 | 0.9776 |          0.0224 |    0.9996 |       0.0004 |
+| SpaMosaic    | group     |   6480 | sklearn_exact | 0.9981 |   6480 | 0.9549 | 0.9369 |          0.0631 |    1.0000 |       0.0000 |
+
+Simulation 中 spa_mo_model 的 bASW/kBET 最好，COSIE 的 bLISI 最好；四种方法的 PCR score 均接近 1。
+
+### spatch Batch Metrics
+
+本表只列出成功完成分析的两个方法；MOFA+ 与 SpaMosaic 的 GPU OOM 原因已在 spatch 主章节记录，不以缺失值参加 batch correction 对比。
+
+| 方法         | batch_key | n_used | kNN backend   |  bASW | bASW n |  bLISI |   kBET | kBET rejection | PCR_score | PCR_batch_R2 |
+| ------------ | --------- | -----: | ------------- | -----: | -----: | -----: | -----: | --------------: | --------: | -----------: |
+| spa_mo_model | section   | 100000 | sklearn_exact | 0.9912 |  10000 | 0.3595 | 0.1595 |          0.8405 |    0.9930 |       0.0070 |
+| COSIE        | group     | 100000 | sklearn_exact | 0.9933 |  10000 | 0.2380 | 0.0588 |          0.9412 |    0.9944 |       0.0056 |
+
+spatch 中 spa_mo_model 的 bLISI/kBET 更高，COSIE 的 bASW/PCR_score 略高；两者使用相同位置的100,000个spot，bASW也使用相同位置的10,000个spot。
 
 MouseBrain/CRC 原汇总 CSV：`/home/hujinlan/spa_mo_model/report_derived_metrics/batch_correction_metrics_mofa_cosie_spamosaic_mousebrain_crc.csv`

@@ -1,0 +1,19 @@
+{
+  "dataset": "spatch",
+  "run_dir": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42",
+  "analysis_dir": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis",
+  "clustering_dir": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis",
+  "sections": [
+    "section1",
+    "section2"
+  ],
+  "metric_sample_size": 10000,
+  "primary_metrics_path": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/clustering_metrics.csv",
+  "spatial_neighbor_k": 6,
+  "metrics": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/metrics/common_clustering_metrics.csv",
+  "section_diagnostics": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/metrics/section_diagnostic_metrics.csv",
+  "spatial_continuity": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/metrics/spatial_continuity_summary.csv",
+  "summary": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/SUMMARY.md",
+  "training_parameters": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/run_summary.json",
+  "analysis_parameters": "/home/hujinlan/spa_mo_model/results/spatch/fullspot_200ep_gpu_seed42/clustering_analysis/clustering_summary.json"
+}

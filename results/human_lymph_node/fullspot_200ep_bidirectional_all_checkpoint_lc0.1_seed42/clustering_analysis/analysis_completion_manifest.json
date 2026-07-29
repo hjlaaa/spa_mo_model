@@ -7,7 +7,8 @@
     "Human_Lymph_Node_A1",
     "Human_Lymph_Node_D1"
   ],
-  "metric_sample_size": 10000,
+  "metric_sample_size": 0,
+  "primary_metrics_path": null,
   "spatial_neighbor_k": 6,
   "metrics": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/common_clustering_metrics.csv",
   "section_diagnostics": "/home/hujinlan/spa_mo_model/results/human_lymph_node/fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42/clustering_analysis/metrics/section_diagnostic_metrics.csv",

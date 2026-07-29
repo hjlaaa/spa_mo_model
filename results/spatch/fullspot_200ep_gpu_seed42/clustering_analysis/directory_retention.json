@@ -1,0 +1,73 @@
+{
+  "dataset": "spatch",
+  "method": "spa_mo_model",
+  "policy": "retain selected clustering result directories while preserving all-k numerical summaries",
+  "retained_k": [
+    5,
+    8,
+    10,
+    12,
+    16,
+    20
+  ],
+  "retained_modes": [
+    "joint",
+    "independent"
+  ],
+  "retained_directories": [
+    "joint_k5",
+    "independent_k5",
+    "joint_k8",
+    "independent_k8",
+    "joint_k10",
+    "independent_k10",
+    "joint_k12",
+    "independent_k12",
+    "joint_k16",
+    "independent_k16",
+    "joint_k20",
+    "independent_k20"
+  ],
+  "removed_directories": [
+    "joint_k2",
+    "independent_k2",
+    "joint_k3",
+    "independent_k3",
+    "joint_k4",
+    "independent_k4",
+    "joint_k6",
+    "independent_k6",
+    "joint_k7",
+    "independent_k7",
+    "joint_k9",
+    "independent_k9",
+    "joint_k11",
+    "independent_k11",
+    "joint_k13",
+    "independent_k13",
+    "joint_k14",
+    "independent_k14",
+    "joint_k15",
+    "independent_k15",
+    "joint_k17",
+    "independent_k17",
+    "joint_k18",
+    "independent_k18",
+    "joint_k19",
+    "independent_k19"
+  ],
+  "all_k_numerical_records": {
+    "cluster_counts": "all_k_cluster_counts.csv",
+    "clustering_and_supervised_metrics": "clustering_metrics.csv",
+    "common_clustering_metrics": "metrics/common_clustering_metrics.csv",
+    "section_diagnostics": "metrics/section_diagnostic_metrics.csv",
+    "spatial_continuity": "metrics/spatial_continuity_summary.csv",
+    "full_analysis_record": "clustering_summary.json"
+  },
+  "removed_artifact_types": [
+    "per-spot cluster-label CSV files for non-retained k",
+    "spatial clustering PNG files for non-retained k",
+    "per-directory cluster-count and spatial-continuity CSV files for non-retained k"
+  ],
+  "regeneration": "Removed per-spot labels and figures can be regenerated from the saved embeddings and recorded analysis parameters."
+}
