@@ -157,6 +157,47 @@ def _zscore_and_normalize(features: Any, mean: torch.Tensor, std: torch.Tensor, 
     return l2_normalize((tensor - mean) / std, dim=-1, eps=delta)
 
 
+def _topology_cost_diagnostics(
+    semantic_cost: torch.Tensor,
+    context_cost: torch.Tensor,
+    combined_cost: torch.Tensor,
+    topk: int,
+    delta: float,
+) -> dict[str, float]:
+    semantic = semantic_cost.detach().float()
+    context = context_cost.detach().float()
+    semantic_centered = semantic.flatten() - semantic.mean()
+    context_centered = context.flatten() - context.mean()
+    correlation = (
+        (semantic_centered * context_centered).mean()
+        / (
+            semantic_centered.square().mean().sqrt()
+            * context_centered.square().mean().sqrt()
+            + float(delta)
+        )
+    )
+
+    effective_topk = min(int(topk), int(semantic.shape[1]))
+    semantic_idx = torch.topk(-semantic, k=effective_topk, dim=1).indices
+    combined_idx = torch.topk(-combined_cost.detach().float(), k=effective_topk, dim=1).indices
+    equality = semantic_idx.unsqueeze(2) == combined_idx.unsqueeze(1)
+    intersection = equality.any(dim=2).sum(dim=1).float()
+    union = (2.0 * float(effective_topk) - intersection).clamp_min(1.0)
+
+    return {
+        "topology_cost_correlation": float(correlation.cpu()),
+        "topology_cost_mean_abs_change": float(
+            (combined_cost.detach().float() - semantic).abs().mean().cpu()
+        ),
+        "topology_semantic_combined_topk_jaccard": float(
+            (intersection / union).mean().cpu()
+        ),
+        "topology_topk_changed_fraction": float(
+            (intersection < float(effective_topk)).float().mean().cpu()
+        ),
+    }
+
+
 @torch.no_grad()
 def compute_initial_multimodal_uot_prior(
     feature_dict: Mapping[str, Mapping[str, Any]],
@@ -265,10 +306,33 @@ def update_uot_prior_from_embeddings(
     clip_cost_min: float = 0.0,
     clip_cost_max: float = 2.0,
     keep_dense: bool = False,
+    context_embedding_dict: Mapping[str, torch.Tensor] | None = None,
+    topology_context_weight: float = 0.0,
+    embedding_source: str = "final",
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    """Update adjacent-section UOT priors from detached final embeddings."""
+    """Update adjacent-section UOT priors from detached embeddings.
+
+    When ``topology_context_weight`` is positive, O2-c0 mixes the spot-wise
+    semantic cosine cost with a cosine cost computed from self-excluded local
+    spatial contexts. A zero topology weight is numerically identical to the
+    legacy semantic-only refresh.
+    """
 
     resolved_sections = _resolve_section_order(final_embedding_dict, section_order)
+    context_weight = float(topology_context_weight)
+    if not 0.0 <= context_weight <= 1.0:
+        raise ValueError("topology_context_weight must be between 0 and 1.")
+    if context_weight > 0.0:
+        if context_embedding_dict is None:
+            raise ValueError(
+                "context_embedding_dict is required when topology_context_weight is positive."
+            )
+        missing_context = [
+            section for section in resolved_sections if section not in context_embedding_dict
+        ]
+        if missing_context:
+            raise KeyError(f"Missing topology context embeddings for sections: {missing_context}")
+
     priors: dict[tuple[str, str], dict[str, Any]] = {}
     for source_section, target_section in zip(resolved_sections[:-1], resolved_sections[1:]):
         source = l2_normalize(
@@ -281,13 +345,48 @@ def update_uot_prior_from_embeddings(
             dim=-1,
             eps=delta,
         )
-        cost = cosine_cost_matrix(
+        semantic_cost = cosine_cost_matrix(
             source,
             target,
             eps=delta,
             clip_min=clip_cost_min,
             clip_max=clip_cost_max,
         )
+        topology_diagnostics: dict[str, float] = {}
+        if context_weight > 0.0:
+            context_source = l2_normalize(
+                _as_float_tensor(context_embedding_dict[source_section], device=source.device),
+                dim=-1,
+                eps=delta,
+            )
+            context_target = l2_normalize(
+                _as_float_tensor(context_embedding_dict[target_section], device=target.device),
+                dim=-1,
+                eps=delta,
+            )
+            if context_source.shape != source.shape or context_target.shape != target.shape:
+                raise ValueError(
+                    "Topology context embeddings must match their semantic embedding shapes; "
+                    f"got {source_section} {tuple(context_source.shape)} vs {tuple(source.shape)} "
+                    f"and {target_section} {tuple(context_target.shape)} vs {tuple(target.shape)}."
+                )
+            context_cost = cosine_cost_matrix(
+                context_source,
+                context_target,
+                eps=delta,
+                clip_min=clip_cost_min,
+                clip_max=clip_cost_max,
+            )
+            cost = (1.0 - context_weight) * semantic_cost + context_weight * context_cost
+            topology_diagnostics = _topology_cost_diagnostics(
+                semantic_cost,
+                context_cost,
+                cost,
+                topk=topk,
+                delta=delta,
+            )
+        else:
+            cost = semantic_cost
         P = unbalanced_sinkhorn(
             cost,
             epsilon=epsilon_update,
@@ -300,12 +399,27 @@ def update_uot_prior_from_embeddings(
         )
         P = normalize_coupling_total_mass(P, delta=delta)
         sparse = sparsify_coupling_topk(P, topk=topk, delta=delta)
+        source_label = f"{embedding_source}_embedding"
+        metadata = {
+            "candidate_source": str(embedding_source),
+            "cost_definition": (
+                f"{1.0 - context_weight:.6g} * (1 - cosine({embedding_source}_source, "
+                f"{embedding_source}_target)) + {context_weight:.6g} * "
+                "(1 - cosine(local_context_source, local_context_target))"
+                if context_weight > 0.0
+                else f"1 - cosine({embedding_source}_source, {embedding_source}_target)"
+            ),
+            "topology_context_weight": context_weight,
+            "semantic_cost_weight": 1.0 - context_weight,
+            **topology_diagnostics,
+        }
         priors[(source_section, target_section)] = {
             "P_dense": P if keep_dense else None,
             "topk_idx": sparse["topk_idx"],
             "topk_weight": sparse["topk_weight"],
             "confidence": sparse["confidence"],
             "row_mass": sparse["row_mass"],
-            "modalities_used": ["final_embedding"],
+            "modalities_used": [source_label],
+            "metadata": metadata,
         }
     return priors

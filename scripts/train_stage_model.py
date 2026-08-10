@@ -319,7 +319,22 @@ def train_stage_model(args):
                     section_order=section_order,
                     epoch=epoch,
                 )
-                model.update_ot_prior(eval_outputs["final_embeddings"], section_order=section_order)
+                refresh_embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
+                    eval_outputs,
+                    refresh_source="final",
+                )
+                topology_weight = (
+                    float(model.config["uot"].get("topology_context_weight", 0.0))
+                    if bool(model.config["uot"].get("topology_aware_refresh_enabled", False))
+                    else 0.0
+                )
+                model.update_ot_prior(
+                    refresh_embeddings,
+                    section_order=section_order,
+                    context_embedding_dict=context_embeddings,
+                    topology_context_weight=topology_weight,
+                    embedding_source="final",
+                )
             print(f"Updated OT prior at epoch {epoch}.")
 
         if args.output_dir and args.save_every > 0 and epoch % args.save_every == 0:

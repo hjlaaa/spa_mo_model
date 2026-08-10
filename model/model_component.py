@@ -164,6 +164,7 @@ class WeightedResidualGraphSAGE(nn.Module):
         self,
         input_dim: int = 128,
         output_dim: int = 128,
+        self_path_mode: str = "legacy",
         dropout: float = 0.1,
         activation: str = "GELU",
         norm: str | None = "LayerNorm",
@@ -176,7 +177,16 @@ class WeightedResidualGraphSAGE(nn.Module):
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.residual = bool(residual)
+        self.self_path_mode = str(self_path_mode)
+        supported_self_path_modes = {"legacy", "no_adj_self", "no_self_linear"}
+        if self.self_path_mode not in supported_self_path_modes:
+            raise ValueError(
+                f"Unsupported GraphSAGE self_path_mode {self.self_path_mode!r}; "
+                f"expected one of {sorted(supported_self_path_modes)}."
+            )
         self.edge_batch_size = None if edge_batch_size is None else int(edge_batch_size)
+        # Keep self_linear in every mode so checkpoints and state_dict keys are
+        # identical across the G0 ablations. G0-b bypasses it in forward().
         self.self_linear = nn.Linear(self.input_dim, self.output_dim, bias=False)
         self.neigh_linear = nn.Linear(self.input_dim, self.output_dim, bias=False)
         self.bias = nn.Parameter(torch.zeros(self.output_dim))
@@ -190,7 +200,8 @@ class WeightedResidualGraphSAGE(nn.Module):
         edge_index: torch.Tensor,
         edge_weight: torch.Tensor,
         edge_batch_size: int | None = None,
-    ) -> torch.Tensor:
+        return_diagnostics: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, object]]:
         if x.ndim != 2:
             raise ValueError(f"x must be 2D, got shape {tuple(x.shape)}.")
         if edge_index.shape[0] != 2:
@@ -216,13 +227,56 @@ class WeightedResidualGraphSAGE(nn.Module):
                 msg_b = x[target_b] * weight_b.unsqueeze(-1)
                 neigh.index_add_(0, source_b, msg_b)
 
-        out = self.activation(self.self_linear(x) + self.neigh_linear(neigh) + self.bias)
+        if self.self_path_mode == "no_self_linear":
+            self_message = torch.zeros(
+                (x.shape[0], self.output_dim),
+                device=x.device,
+                dtype=x.dtype,
+            )
+        else:
+            self_message = self.self_linear(x)
+        neighbor_message = self.neigh_linear(neigh)
+        out = self.activation(self_message + neighbor_message + self.bias)
         out = self.dropout(out)
         if self.residual:
             out = x + out
         if self.norm is not None:
             out = self.norm(out)
-        return out
+        if not return_diagnostics:
+            return out
+
+        eps = torch.finfo(x.dtype).eps
+        row_weight_sum = torch.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        row_weight_sum.index_add_(0, source, weight)
+        self_loop_mask = source == target
+        diagnostics: dict[str, object] = {
+            "self_path_mode": self.self_path_mode,
+            "edge_count": int(source.numel()),
+            "self_loop_count": int(self_loop_mask.sum().detach().cpu().item()),
+            "row_weight_sum_min": float(row_weight_sum.min().detach().cpu().item()),
+            "row_weight_sum_max": float(row_weight_sum.max().detach().cpu().item()),
+            "self_message_mean_l2": float(
+                torch.linalg.vector_norm(self_message.float(), dim=1).mean().detach().cpu().item()
+            ),
+            "neighbor_message_mean_l2": float(
+                torch.linalg.vector_norm(neighbor_message.float(), dim=1).mean().detach().cpu().item()
+            ),
+            "residual_input_mean_l2": float(
+                torch.linalg.vector_norm(x.float(), dim=1).mean().detach().cpu().item()
+            ),
+            "self_to_neighbor_norm_ratio": float(
+                (
+                    torch.linalg.vector_norm(self_message.float(), dim=1).mean()
+                    / torch.linalg.vector_norm(neighbor_message.float(), dim=1)
+                    .mean()
+                    .clamp_min(eps)
+                )
+                .detach()
+                .cpu()
+                .item()
+            ),
+        }
+        return out, diagnostics
 
 
 class OTGuidedAttention(nn.Module):

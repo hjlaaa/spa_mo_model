@@ -107,7 +107,15 @@ def parse_args():
             "Use a smaller value such as 4096/2048/1024 to reduce FAISS GPU temporary memory."
         ),
     )
-    parser.add_argument("--dynamic_candidate_source", choices=["fused", "final"], default="final")
+    parser.add_argument(
+        "--dynamic_candidate_source",
+        choices=["fused", "final"],
+        default="final",
+        help=(
+            "Embedding used for dynamic OT refresh. final preserves the original "
+            "final-embedding refresh path."
+        ),
+    )
     parser.add_argument("--uot_epsilon", type=float, default=0.05)
     parser.add_argument("--uot_tau_a", type=float, default=1.0)
     parser.add_argument("--uot_tau_b", type=float, default=1.0)
@@ -709,19 +717,37 @@ def update_model_ot_prior(
     section_order: list[str],
     args,
 ):
+    # Preserve the original source semantics: dense refresh always uses final
+    # embeddings; only candidate-sparse mode exposes the legacy fused/final option.
+    refresh_source = (
+        "final" if args.ot_prior_mode == "dense" else str(args.dynamic_candidate_source)
+    )
+    embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
+        eval_outputs,
+        refresh_source=refresh_source,
+    )
+    uot_cfg = model.config["uot"]
+    topology_weight = (
+        float(uot_cfg.get("topology_context_weight", 0.0))
+        if bool(uot_cfg.get("topology_aware_refresh_enabled", False))
+        else 0.0
+    )
     if args.ot_prior_mode == "dense":
-        return model.update_ot_prior(eval_outputs["final_embeddings"], section_order=section_order)
-    if args.ot_prior_mode == "candidate_sparse":
-        embeddings = (
-            eval_outputs["fused_embeddings"]
-            if args.dynamic_candidate_source == "fused"
-            else eval_outputs["final_embeddings"]
+        return model.update_ot_prior(
+            embeddings,
+            section_order=section_order,
+            context_embedding_dict=context_embeddings,
+            topology_context_weight=topology_weight,
+            embedding_source=refresh_source,
         )
+    if args.ot_prior_mode == "candidate_sparse":
         return model.update_candidate_sparse_ot_prior(
             embeddings,
             section_order=section_order,
-            candidate_source=args.dynamic_candidate_source,
+            candidate_source=refresh_source,
             bidirectional=bool(args.bidirectional_ot_attention),
+            context_embedding_dict=context_embeddings,
+            topology_context_weight=topology_weight,
             **sparse_prior_kwargs(args),
         )
     raise ValueError(f"Unsupported ot_prior_mode: {args.ot_prior_mode}")
@@ -1219,8 +1245,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         total_loss_finite = bool(torch.isfinite(outputs["losses"]["total_loss"]).item())
         if reconstruction_keys != {"CRC_003": ["Protein", "RNA"], "CRC_006": ["Protein", "RNA"]}:
             raise ValueError(f"Unexpected reconstruction keys: {reconstruction_keys}")
-        # Initial UOT is multimodal RNA/Protein. After a training-time dynamic
-        # update, the prior is recomputed from final embeddings by design.
+        # Initial UOT remains multimodal RNA/Protein. Dynamic refresh preserves
+        # the original detached final-embedding source by default.
         accepted_ot_modalities = [["RNA", "Protein"]]
         if args.train and ot_updates:
             accepted_ot_modalities.append(["final_embedding"])

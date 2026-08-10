@@ -89,7 +89,11 @@ def parse_args():
     parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--faiss_train_sample_size", type=int, default=20000)
     parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
-    parser.add_argument("--dynamic_candidate_source", choices=["fused", "final"], default="final")
+    parser.add_argument(
+        "--dynamic_candidate_source",
+        choices=["fused", "final"],
+        default="final",
+    )
     parser.add_argument("--uot_epsilon", type=float, default=0.05)
     parser.add_argument("--uot_tau_a", type=float, default=1.0)
     parser.add_argument("--uot_tau_b", type=float, default=1.0)

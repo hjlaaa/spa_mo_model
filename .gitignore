@@ -18,3 +18,4 @@ runs/
 *.npz
 UNI/
 result_v2_Contrastive_loss/
+result_v3/

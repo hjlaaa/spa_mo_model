@@ -136,10 +136,124 @@ def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
 
     ``            eval_outputs = model(feature_dict, spatial_loc_dict, section_order=section_order, epoch=epoch)``
 
-    ``            model.update_ot_prior(eval_outputs["final_embeddings"], section_order)``
+    ``            embeddings, contexts, _ = model.prepare_ot_prior_refresh(eval_outputs)``
+
+    ``            model.update_ot_prior(embeddings, section_order,``
+
+    ``                context_embedding_dict=contexts, topology_context_weight=0.2,``
+
+    ``                embedding_source="final")``
     """
 
     return epoch > 0 and epoch % update_interval == 0
+
+
+def compute_self_excluded_spatial_context(
+    embedding_dict: Mapping[str, torch.Tensor],
+    spatial_graph_dict: Mapping[str, Mapping[str, torch.Tensor]],
+    delta: float = 1e-8,
+) -> tuple[dict[str, torch.Tensor], dict[str, dict[str, float]]]:
+    """Aggregate detached local neighbors after removing graph self-loops.
+
+    O2-c0 reuses the model's local spatial graph. Edge weights are
+    renormalized after self-loop removal so no spot's own embedding enters its
+    topology context.
+    """
+
+    contexts: dict[str, torch.Tensor] = {}
+    diagnostics: dict[str, dict[str, float]] = {}
+    for section, value in embedding_dict.items():
+        graph = spatial_graph_dict.get(section)
+        if not isinstance(graph, Mapping):
+            raise KeyError(f"O2-c0 missing spatial graph for section {section}.")
+        edge_index = graph.get("edge_index")
+        edge_weight = graph.get("edge_weight")
+        if not isinstance(edge_index, torch.Tensor) or not isinstance(edge_weight, torch.Tensor):
+            raise TypeError(f"O2-c0 invalid spatial graph tensors for {section}.")
+
+        embedding = value.detach()
+        if embedding.ndim != 2 or embedding.shape[0] == 0:
+            raise ValueError(f"O2-c0 invalid embedding for {section}: {tuple(embedding.shape)}")
+        if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+            raise ValueError(f"O2-c0 invalid edge_index shape for {section}: {tuple(edge_index.shape)}")
+        if edge_weight.ndim != 1 or edge_weight.shape[0] != edge_index.shape[1]:
+            raise ValueError(f"O2-c0 invalid edge_weight shape for {section}: {tuple(edge_weight.shape)}")
+
+        source = edge_index[0].to(device=embedding.device)
+        target = edge_index[1].to(device=embedding.device)
+        weight = edge_weight.to(device=embedding.device, dtype=embedding.dtype)
+        if source.numel() and (
+            int(source.min()) < 0
+            or int(target.min()) < 0
+            or int(source.max()) >= int(embedding.shape[0])
+            or int(target.max()) >= int(embedding.shape[0])
+        ):
+            raise ValueError(f"O2-c0 spatial graph contains out-of-range indices for {section}.")
+
+        keep = source != target
+        source = source[keep]
+        target = target[keep]
+        weight = weight[keep]
+        if source.numel() == 0:
+            raise ValueError(f"O2-c0 spatial graph for {section} has no non-self edges.")
+
+        row_sum = torch.zeros(
+            embedding.shape[0],
+            device=embedding.device,
+            dtype=embedding.dtype,
+        )
+        row_sum.index_add_(0, source, weight)
+        if bool((row_sum <= float(delta)).any()):
+            raise ValueError(
+                f"O2-c0 spatial graph for {section} contains a spot without a non-self neighbor."
+            )
+        normalized_weight = weight / row_sum[source].clamp_min(float(delta))
+        context = torch.zeros_like(embedding)
+        context.index_add_(
+            0,
+            source,
+            embedding[target] * normalized_weight.unsqueeze(-1),
+        )
+        contexts[str(section)] = context.detach()
+
+        cosine = F.cosine_similarity(
+            embedding.float(),
+            context.float(),
+            dim=1,
+            eps=float(delta),
+        )
+        post_row_sum = torch.zeros_like(row_sum)
+        post_row_sum.index_add_(0, source, normalized_weight)
+        diagnostics[str(section)] = {
+            "nonself_edge_count": float(source.numel()),
+            "neighbors_per_spot_mean": float(source.numel() / max(int(embedding.shape[0]), 1)),
+            "post_exclusion_row_sum_min": float(post_row_sum.min().cpu()),
+            "embedding_context_cosine_mean": float(cosine.mean().cpu()),
+            "embedding_context_cosine_std": float(cosine.std(unbiased=False).cpu()),
+        }
+    return contexts, diagnostics
+
+
+def summarize_ot_topology_cost(
+    prior: Mapping[tuple[str, str], Mapping[str, Any]] | None,
+) -> dict[str, float]:
+    """Average O2-c0 cost diagnostics stored on directional priors."""
+
+    values: dict[str, list[float]] = {}
+    seen_metadata: set[int] = set()
+    for item in (prior or {}).values():
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping) or id(metadata) in seen_metadata:
+            continue
+        seen_metadata.add(id(metadata))
+        for key, value in metadata.items():
+            if key.startswith("topology_") and isinstance(value, (int, float)):
+                values.setdefault(key, []).append(float(value))
+    return {
+        key: float(sum(items) / len(items))
+        for key, items in values.items()
+        if items
+    }
 
 
 class StageMultiModalModel(nn.Module):
@@ -195,6 +309,7 @@ class StageMultiModalModel(nn.Module):
         self.graphsage = WeightedResidualGraphSAGE(
             input_dim=int(graph_cfg["input_dim"]),
             output_dim=int(graph_cfg["output_dim"]),
+            self_path_mode=graph_cfg.get("self_path_mode", "legacy"),
             dropout=float(graph_cfg["dropout"]),
             activation=graph_cfg["activation"],
             norm=graph_cfg["norm"],
@@ -366,11 +481,12 @@ class StageMultiModalModel(nn.Module):
         device: torch.device,
         cache_spatial_graphs: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        include_self_loop = graph_sage_cfg.get("self_path_mode", "legacy") != "no_adj_self"
         if not cache_spatial_graphs:
             return compute_spatial_knn_graph_with_weights(
                 spatial_coords,
                 k=int(graph_cfg["knn_neighbors_spatial"]),
-                include_self_loop=True,
+                include_self_loop=include_self_loop,
                 undirected=True,
                 delta=float(graph_sage_cfg["delta"]),
                 device=device,
@@ -381,7 +497,7 @@ class StageMultiModalModel(nn.Module):
             section,
             spatial_n,
             int(graph_cfg["knn_neighbors_spatial"]),
-            True,
+            include_self_loop,
             True,
             float(graph_sage_cfg["delta"]),
         )
@@ -389,7 +505,7 @@ class StageMultiModalModel(nn.Module):
             edge_index_cpu, edge_weight_cpu = compute_spatial_knn_graph_with_weights(
                 spatial_coords,
                 k=int(graph_cfg["knn_neighbors_spatial"]),
-                include_self_loop=True,
+                include_self_loop=include_self_loop,
                 undirected=True,
                 delta=float(graph_sage_cfg["delta"]),
                 device=torch.device("cpu"),
@@ -498,6 +614,67 @@ class StageMultiModalModel(nn.Module):
             )
 
         return total_loss, detail, reconstructions
+
+    def prepare_ot_prior_refresh(
+        self,
+        outputs: Mapping[str, Any],
+        refresh_source: str | None = None,
+    ) -> tuple[
+        dict[str, torch.Tensor],
+        dict[str, torch.Tensor] | None,
+        dict[str, Any],
+    ]:
+        """Prepare detached semantic and local-context inputs for OT refresh."""
+
+        uot_cfg = self.config["uot"]
+        source = str(refresh_source or "final")
+        output_key_by_source = {
+            "final": "final_embeddings",
+            "fused": "fused_embeddings",
+        }
+        if source not in output_key_by_source:
+            raise ValueError(
+                f"Unsupported OT refresh_source {source!r}; expected 'final' or 'fused'."
+            )
+        output_key = output_key_by_source[source]
+        values = outputs.get(output_key)
+        if not isinstance(values, Mapping) or not values:
+            raise KeyError(f"OT prior refresh requested unavailable output {output_key!r}.")
+        embeddings: dict[str, torch.Tensor] = {}
+        for section, value in values.items():
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"OT prior refresh embedding for {section} is not a tensor.")
+            if value.ndim != 2 or value.shape[0] == 0:
+                raise ValueError(
+                    f"Invalid OT prior refresh embedding shape for {section}: {tuple(value.shape)}"
+                )
+            embeddings[str(section)] = value.detach()
+
+        topology_enabled = bool(uot_cfg.get("topology_aware_refresh_enabled", False))
+        context_weight = float(uot_cfg.get("topology_context_weight", 0.0))
+        if not 0.0 <= context_weight <= 1.0:
+            raise ValueError("uot.topology_context_weight must be between 0 and 1.")
+        contexts: dict[str, torch.Tensor] | None = None
+        context_diagnostics: dict[str, dict[str, float]] = {}
+        if topology_enabled and context_weight > 0.0:
+            spatial_graphs = outputs.get("spatial_graph_dict")
+            if not isinstance(spatial_graphs, Mapping):
+                raise KeyError(
+                    "O2-c0 requires spatial_graph_dict in the full forward outputs."
+                )
+            contexts, context_diagnostics = compute_self_excluded_spatial_context(
+                embeddings,
+                spatial_graphs,
+                delta=float(self.config["ot_attention"]["delta"]),
+            )
+
+        diagnostics: dict[str, Any] = {
+            "refresh_source": source,
+            "topology_aware_refresh_enabled": topology_enabled,
+            "topology_context_weight": context_weight if topology_enabled else 0.0,
+            "context": context_diagnostics,
+        }
+        return embeddings, contexts, diagnostics
 
     def initialize_ot_prior(
         self,
@@ -611,8 +788,11 @@ class StageMultiModalModel(nn.Module):
         self,
         final_embedding_dict: Mapping[str, torch.Tensor],
         section_order: Sequence[str] | None = None,
+        context_embedding_dict: Mapping[str, torch.Tensor] | None = None,
+        topology_context_weight: float = 0.0,
+        embedding_source: str = "final",
     ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Refresh adjacent-stage UOT priors from detached final embeddings."""
+        """Refresh adjacent-stage UOT priors from detached embeddings."""
 
         if not self.config["uot"]["enabled"]:
             self.ot_prior = {}
@@ -632,6 +812,9 @@ class StageMultiModalModel(nn.Module):
             clip_cost_min=float(uot_cfg["clip_cost_min"]),
             clip_cost_max=float(uot_cfg["clip_cost_max"]),
             keep_dense=bool(uot_cfg.get("keep_dense", False)),
+            context_embedding_dict=context_embedding_dict,
+            topology_context_weight=topology_context_weight,
+            embedding_source=embedding_source,
         )
         return self.ot_prior
 
@@ -656,6 +839,8 @@ class StageMultiModalModel(nn.Module):
         stabilizer: float = 1e-8,
         candidate_source: str = "fused",
         bidirectional: bool = False,
+        context_embedding_dict: Mapping[str, torch.Tensor] | None = None,
+        topology_context_weight: float = 0.0,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Refresh candidate-sparse UOT priors from fused/final embeddings."""
 
@@ -687,6 +872,8 @@ class StageMultiModalModel(nn.Module):
             stabilizer=stabilizer,
             device=device,
             candidate_source=candidate_source,
+            context_embedding_dict=context_embedding_dict,
+            topology_context_weight=topology_context_weight,
         )
         return self.ot_prior
 

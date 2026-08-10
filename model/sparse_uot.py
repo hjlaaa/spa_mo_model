@@ -181,6 +181,127 @@ def _compute_edge_cosine_cost(
     return costs
 
 
+def _topology_cost_diagnostics(
+    semantic_cost: torch.Tensor,
+    context_cost: torch.Tensor,
+    combined_cost: torch.Tensor,
+    stabilizer: float,
+) -> dict[str, float]:
+    semantic = semantic_cost.detach().float().flatten()
+    context = context_cost.detach().float().flatten()
+    semantic_centered = semantic - semantic.mean()
+    context_centered = context - context.mean()
+    correlation = (
+        semantic_centered.mul(context_centered).mean()
+        / (
+            semantic_centered.square().mean().sqrt()
+            * context_centered.square().mean().sqrt()
+            + float(stabilizer)
+        )
+    )
+    return {
+        "topology_cost_correlation": float(correlation.cpu()),
+        "topology_cost_mean_abs_change": float(
+            (combined_cost.detach().float() - semantic_cost.detach().float())
+            .abs()
+            .mean()
+            .cpu()
+        ),
+    }
+
+
+def _candidate_topk_change_diagnostics(
+    candidate_idx: torch.Tensor,
+    semantic_cost: torch.Tensor,
+    combined_cost: torch.Tensor,
+    attention_topk: int,
+) -> dict[str, float]:
+    k = min(int(attention_topk), int(candidate_idx.shape[1]))
+    semantic_pos = torch.topk(-semantic_cost, k=k, dim=1).indices
+    combined_pos = torch.topk(-combined_cost, k=k, dim=1).indices
+    candidate_device = candidate_idx.to(semantic_pos.device)
+    semantic_idx = candidate_device.gather(1, semantic_pos)
+    combined_idx = candidate_device.gather(1, combined_pos)
+    equality = semantic_idx.unsqueeze(2) == combined_idx.unsqueeze(1)
+    intersection = equality.any(dim=2).sum(dim=1).float()
+    jaccard = intersection / (2.0 * float(k) - intersection).clamp_min(1.0)
+    return {
+        "topology_semantic_combined_topk_jaccard": float(jaccard.mean().cpu()),
+        "topology_topk_changed_fraction": float(
+            (intersection < float(k)).float().mean().cpu()
+        ),
+    }
+
+
+def _edge_topk_change_diagnostics(
+    edge_src: torch.Tensor,
+    edge_tgt: torch.Tensor,
+    semantic_cost: torch.Tensor,
+    combined_cost: torch.Tensor,
+    n_source: int,
+    attention_topk: int,
+) -> dict[str, float]:
+    source = edge_src.detach().cpu().long()
+    target = edge_tgt.detach().cpu().long()
+    semantic = semantic_cost.detach().cpu().float()
+    combined = combined_cost.detach().cpu().float()
+    order = torch.argsort(source)
+    counts = torch.bincount(source[order], minlength=int(n_source))
+    offsets = torch.cat([torch.zeros(1, dtype=torch.long), counts.cumsum(0)])
+    jaccards: list[float] = []
+    changed = 0
+    for row in range(int(n_source)):
+        start = int(offsets[row])
+        end = int(offsets[row + 1])
+        if end <= start:
+            continue
+        row_edges = order[start:end]
+        k = min(int(attention_topk), int(row_edges.numel()))
+        semantic_edges = row_edges[torch.topk(-semantic[row_edges], k=k).indices]
+        combined_edges = row_edges[torch.topk(-combined[row_edges], k=k).indices]
+        semantic_targets = set(target[semantic_edges].tolist())
+        combined_targets = set(target[combined_edges].tolist())
+        intersection = len(semantic_targets & combined_targets)
+        union = max(len(semantic_targets | combined_targets), 1)
+        jaccards.append(intersection / union)
+        changed += int(semantic_targets != combined_targets)
+    return {
+        "topology_semantic_combined_topk_jaccard": float(
+            sum(jaccards) / max(len(jaccards), 1)
+        ),
+        "topology_topk_changed_fraction": float(changed / max(len(jaccards), 1)),
+    }
+
+
+def _validate_topology_context(
+    embedding_dict: Mapping[str, Any],
+    section_order: Sequence[str] | None,
+    context_embedding_dict: Mapping[str, Any] | None,
+    topology_context_weight: float,
+) -> tuple[list[str], float]:
+    resolved_sections = _resolve_section_order(embedding_dict, section_order)
+    context_weight = float(topology_context_weight)
+    if not 0.0 <= context_weight <= 1.0:
+        raise ValueError("topology_context_weight must be between 0 and 1.")
+    if context_weight > 0.0:
+        if context_embedding_dict is None:
+            raise ValueError(
+                "context_embedding_dict is required when topology_context_weight is positive."
+            )
+        missing = [section for section in resolved_sections if section not in context_embedding_dict]
+        if missing:
+            raise KeyError(f"Missing topology context embeddings for sections: {missing}")
+        for section in resolved_sections:
+            semantic_shape = _as_numpy_float32(embedding_dict[section]).shape
+            context_shape = _as_numpy_float32(context_embedding_dict[section]).shape
+            if context_shape != semantic_shape:
+                raise ValueError(
+                    f"Topology context shape for {section} is {context_shape}, "
+                    f"expected {semantic_shape}."
+                )
+    return resolved_sections, context_weight
+
+
 def _prune_edges_bidirectional(
     edge_src: torch.Tensor,
     edge_tgt: torch.Tensor,
@@ -815,10 +936,17 @@ def update_candidate_sparse_uot_prior_from_embeddings(
     stabilizer: float = 1e-8,
     device=None,
     candidate_source: str = "fused",
+    context_embedding_dict: Mapping[str, Any] | None = None,
+    topology_context_weight: float = 0.0,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Build dynamic sparse UOT priors from current fused/final embeddings."""
 
-    resolved_sections = _resolve_section_order(embedding_dict, section_order)
+    resolved_sections, context_weight = _validate_topology_context(
+        embedding_dict,
+        section_order,
+        context_embedding_dict,
+        topology_context_weight,
+    )
     priors: dict[tuple[str, str], dict[str, Any]] = {}
     device = torch.device(device or "cpu")
     for source_section, target_section in zip(resolved_sections[:-1], resolved_sections[1:]):
@@ -837,7 +965,7 @@ def update_candidate_sparse_uot_prior_from_embeddings(
         )
         candidate_idx = torch.as_tensor(result["candidate_idx"], dtype=torch.long)
         candidate_mask = candidate_idx >= 0
-        candidate_cost = _compute_candidate_cosine_cost(
+        semantic_cost = _compute_candidate_cosine_cost(
             embedding_dict[source_section],
             embedding_dict[target_section],
             candidate_idx,
@@ -845,6 +973,36 @@ def update_candidate_sparse_uot_prior_from_embeddings(
             stabilizer=stabilizer,
             device=device,
         )
+        topology_diagnostics: dict[str, float] = {}
+        if context_weight > 0.0:
+            context_cost = _compute_candidate_cosine_cost(
+                context_embedding_dict[source_section],
+                context_embedding_dict[target_section],
+                candidate_idx,
+                candidate_mask,
+                stabilizer=stabilizer,
+                device=device,
+            )
+            candidate_cost = (
+                (1.0 - context_weight) * semantic_cost
+                + context_weight * context_cost
+            )
+            topology_diagnostics = {
+                **_topology_cost_diagnostics(
+                    semantic_cost,
+                    context_cost,
+                    candidate_cost,
+                    stabilizer=stabilizer,
+                ),
+                **_candidate_topk_change_diagnostics(
+                    candidate_idx,
+                    semantic_cost,
+                    candidate_cost,
+                    attention_topk=attention_topk,
+                ),
+            }
+        else:
+            candidate_cost = semantic_cost
         sparse_start = time.time()
         n_target = int(_as_numpy_float32(embedding_dict[target_section]).shape[0])
         sparse = sparse_unbalanced_sinkhorn_topk(
@@ -868,7 +1026,15 @@ def update_candidate_sparse_uot_prior_from_embeddings(
             "candidate_source": candidate_source,
             "modalities_used": [modality_label],
             "modality_order": [modality_label],
-            "cost_definition": f"1 - cosine({candidate_source}_source, {candidate_source}_target)",
+            "cost_definition": (
+                f"{1.0 - context_weight:.6g} * (1 - cosine({candidate_source}_source, "
+                f"{candidate_source}_target)) + {context_weight:.6g} * "
+                "(1 - cosine(local_context_source, local_context_target))"
+                if context_weight > 0.0
+                else f"1 - cosine({candidate_source}_source, {candidate_source}_target)"
+            ),
+            "topology_context_weight": context_weight,
+            "semantic_cost_weight": 1.0 - context_weight,
             "candidate_backend": candidate_backend,
             "candidate_k": int(candidate_idx.shape[1]),
             "attention_topk": int(sparse["topk_idx"].shape[1]),
@@ -888,6 +1054,7 @@ def update_candidate_sparse_uot_prior_from_embeddings(
             "candidate_search_time_sec": float(result["metadata"]["candidate_search_time_sec"]),
             "sparse_uot_time_sec": float(sparse_time),
             "total_prior_time_sec": float(time.time() - start_time),
+            **topology_diagnostics,
             **_candidate_qc(candidate_idx, candidate_mask, n_target),
         }
         priors[(source_section, target_section)] = {
@@ -919,10 +1086,17 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
     stabilizer: float = 1e-8,
     device=None,
     candidate_source: str = "final",
+    context_embedding_dict: Mapping[str, Any] | None = None,
+    topology_context_weight: float = 0.0,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """Build dynamic bidirectional sparse UOT priors from current embeddings."""
 
-    resolved_sections = _resolve_section_order(embedding_dict, section_order)
+    resolved_sections, context_weight = _validate_topology_context(
+        embedding_dict,
+        section_order,
+        context_embedding_dict,
+        topology_context_weight,
+    )
     priors: dict[tuple[str, str], dict[str, Any]] = {}
     device = torch.device(device or "cpu")
     modality_label = f"{candidate_source}_embedding"
@@ -961,7 +1135,7 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
             torch.cat([f_tgt, r_tgt]),
             n_target=n_right,
         )
-        edge_cost = _compute_edge_cosine_cost(
+        semantic_edge_cost = _compute_edge_cosine_cost(
             embedding_dict[left_section],
             embedding_dict[right_section],
             edge_src,
@@ -969,6 +1143,38 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
             stabilizer=stabilizer,
             device=device,
         )
+        topology_diagnostics: dict[str, float] = {}
+        if context_weight > 0.0:
+            context_edge_cost = _compute_edge_cosine_cost(
+                context_embedding_dict[left_section],
+                context_embedding_dict[right_section],
+                edge_src,
+                edge_tgt,
+                stabilizer=stabilizer,
+                device=device,
+            )
+            edge_cost = (
+                (1.0 - context_weight) * semantic_edge_cost
+                + context_weight * context_edge_cost
+            )
+            topology_diagnostics = {
+                **_topology_cost_diagnostics(
+                    semantic_edge_cost,
+                    context_edge_cost,
+                    edge_cost,
+                    stabilizer=stabilizer,
+                ),
+                **_edge_topk_change_diagnostics(
+                    edge_src,
+                    edge_tgt,
+                    semantic_edge_cost,
+                    edge_cost,
+                    n_source=n_left,
+                    attention_topk=attention_topk,
+                ),
+            }
+        else:
+            edge_cost = semantic_edge_cost
         edge_src, edge_tgt, edge_cost = _prune_edges_bidirectional(
             edge_src=edge_src,
             edge_tgt=edge_tgt,
@@ -999,7 +1205,15 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
             "candidate_source": candidate_source,
             "modalities_used": [modality_label],
             "modality_order": [modality_label],
-            "cost_definition": f"1 - cosine({candidate_source}_left, {candidate_source}_right)",
+            "cost_definition": (
+                f"{1.0 - context_weight:.6g} * (1 - cosine({candidate_source}_left, "
+                f"{candidate_source}_right)) + {context_weight:.6g} * "
+                "(1 - cosine(local_context_left, local_context_right))"
+                if context_weight > 0.0
+                else f"1 - cosine({candidate_source}_left, {candidate_source}_right)"
+            ),
+            "topology_context_weight": context_weight,
+            "semantic_cost_weight": 1.0 - context_weight,
             "candidate_backend": candidate_backend,
             "candidate_k": int(candidate_k),
             "attention_topk": int(attention_topk),
@@ -1025,6 +1239,7 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
             ),
             "sparse_uot_time_sec": float(sparse_time),
             "total_prior_time_sec": float(time.time() - start_time),
+            **topology_diagnostics,
             **_bidirectional_support_qc(edge_src, edge_tgt, n_left, n_right),
         }
         priors[(left_section, right_section)] = _make_direction_prior(

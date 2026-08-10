@@ -14,8 +14,8 @@ from scipy import sparse
 ORIGINAL = Path(__file__).with_name("run_crc_stereocite.py")
 DATA_DIR = Path("/home/hujinlan/spa_mo_model/data/Human_Lymph_Node")
 OUTPUT_DIR = Path(
-    "/home/hujinlan/spa_mo_model/results/human_lymph_node/"
-    "fullspot_200ep_bidirectional_all_checkpoint_lc0.1_seed42"
+    "/home/hujinlan/spa_mo_model/result_v3/human_lymph_node/"
+    "bidirectional_sparse_uot_fixed_lc0.1_seed42"
 )
 
 

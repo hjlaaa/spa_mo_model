@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -44,6 +45,43 @@ def parse_args():
     )
     parser.add_argument("--device", choices=["cpu", "cuda"], default=None, help="Override training device.")
     parser.add_argument("--output_dir", default=None, help="Override config training.output_dir.")
+    parser.add_argument("--seed", type=int, default=42, help="Training and OT candidate-search seed.")
+    parser.add_argument(
+        "--ot_prior_mode",
+        choices=["dense", "candidate_sparse"],
+        default="dense",
+        help="Use the legacy dense UOT prior or candidate-sparse UOT.",
+    )
+    parser.add_argument(
+        "--bidirectional_ot_attention",
+        action="store_true",
+        help="Use synchronous bidirectional attention for candidate-sparse adjacent-section priors.",
+    )
+    parser.add_argument(
+        "--candidate_backend",
+        choices=["faiss_ivf", "faiss_flat", "blockwise"],
+        default="faiss_ivf",
+    )
+    parser.add_argument("--initial_modality_candidate_k", type=int, default=100)
+    parser.add_argument("--candidate_k", type=int, default=200)
+    parser.add_argument("--attention_topk", type=int, default=10)
+    parser.add_argument("--faiss_nlist", type=int, default=256)
+    parser.add_argument("--faiss_nprobe", type=int, default=32)
+    parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default="auto")
+    parser.add_argument("--faiss_train_sample_size", type=int, default=10000)
+    parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
+    parser.add_argument(
+        "--dynamic_candidate_source",
+        choices=["fused", "final"],
+        default="final",
+    )
+    parser.add_argument("--uot_epsilon", type=float, default=0.05)
+    parser.add_argument("--uot_tau_a", type=float, default=1.0)
+    parser.add_argument("--uot_tau_b", type=float, default=1.0)
+    parser.add_argument("--uot_max_iter", type=int, default=100)
+    parser.add_argument("--uot_stabilizer", type=float, default=1e-8)
+    parser.add_argument("--update_interval", type=int, default=20)
+    parser.add_argument("--spatial_knn_k", type=int, default=5)
     parser.add_argument(
         "--save_ot_prior_topk",
         action="store_true",
@@ -108,6 +146,80 @@ def json_safe(value):
     if isinstance(value, (list, tuple)):
         return [json_safe(item) for item in value]
     return value
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def sparse_prior_kwargs(args) -> dict[str, Any]:
+    return {
+        "candidate_k": int(args.candidate_k),
+        "attention_topk": int(args.attention_topk),
+        "candidate_backend": str(args.candidate_backend),
+        "faiss_nlist": int(args.faiss_nlist),
+        "faiss_nprobe": int(args.faiss_nprobe),
+        "faiss_device": str(args.faiss_device),
+        "faiss_train_sample_size": int(args.faiss_train_sample_size),
+        "faiss_query_batch_size": int(args.faiss_query_batch_size),
+        "seed": int(args.seed),
+        "epsilon": float(args.uot_epsilon),
+        "tau_a": float(args.uot_tau_a),
+        "tau_b": float(args.uot_tau_b),
+        "max_iter": int(args.uot_max_iter),
+        "stabilizer": float(args.uot_stabilizer),
+    }
+
+
+def initialize_model_ot_prior(model, feature_dict, section_order, args):
+    if args.ot_prior_mode == "dense":
+        return model.initialize_ot_prior(feature_dict, section_order=section_order)
+    return model.initialize_candidate_sparse_ot_prior(
+        feature_dict,
+        section_order=section_order,
+        initial_modality_candidate_k=int(args.initial_modality_candidate_k),
+        bidirectional=bool(args.bidirectional_ot_attention),
+        **sparse_prior_kwargs(args),
+    )
+
+
+def update_model_ot_prior(model, eval_outputs, section_order, args):
+    refresh_source = (
+        "final"
+        if args.ot_prior_mode == "dense"
+        else str(args.dynamic_candidate_source)
+    )
+    embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
+        eval_outputs,
+        refresh_source=refresh_source,
+    )
+    uot_cfg = model.config["uot"]
+    topology_weight = (
+        float(uot_cfg.get("topology_context_weight", 0.0))
+        if bool(uot_cfg.get("topology_aware_refresh_enabled", False))
+        else 0.0
+    )
+    if args.ot_prior_mode == "dense":
+        return model.update_ot_prior(
+            embeddings,
+            section_order=section_order,
+            context_embedding_dict=context_embeddings,
+            topology_context_weight=topology_weight,
+            embedding_source=refresh_source,
+        )
+    return model.update_candidate_sparse_ot_prior(
+        embeddings,
+        section_order=section_order,
+        candidate_source=refresh_source,
+        bidirectional=bool(args.bidirectional_ot_attention),
+        context_embedding_dict=context_embeddings,
+        topology_context_weight=topology_weight,
+        **sparse_prior_kwargs(args),
+    )
 
 
 def subset_section_result(section_result: dict[str, Any], max_spots: int | None):
@@ -211,6 +323,13 @@ def build_model_config(
     epochs: int | None,
     lambda_contrast: float | None = None,
     device: str | None = None,
+    update_interval: int = 20,
+    attention_topk: int = 10,
+    uot_epsilon: float = 0.05,
+    uot_tau_a: float = 1.0,
+    uot_tau_b: float = 1.0,
+    uot_max_iter: int = 100,
+    spatial_knn_k: int = 5,
 ):
     model_config = get_default_model_config()
     training = config.get("training", {})
@@ -227,6 +346,17 @@ def build_model_config(
         recursive_update(model_config, config["model"])
     if lambda_contrast is not None:
         model_config["loss"]["lambda_contrast"] = float(lambda_contrast)
+    model_config["uot"].update(
+        {
+            "update_interval": int(update_interval),
+            "topk": int(attention_topk),
+            "epsilon_update": float(uot_epsilon),
+            "tau_a": float(uot_tau_a),
+            "tau_b": float(uot_tau_b),
+            "max_iter": int(uot_max_iter),
+        }
+    )
+    model_config["graph"]["knn_neighbors_spatial"] = int(spatial_knn_k)
     return model_config
 
 
@@ -324,6 +454,7 @@ def save_ot_prior_topk(
             "run_mode": run_mode,
             "note": note,
         }
+        metadata.update(prior.get("metadata", {}))
         with open(paths["metadata"], "w", encoding="utf-8") as handle:
             json.dump(json_safe(metadata), handle, indent=2, ensure_ascii=False)
 
@@ -357,6 +488,14 @@ def save_run_artifacts(
 def run_mousebrain(args):
     if args.lambda_contrast is not None and args.lambda_contrast_schedule is not None:
         raise ValueError("Use either --lambda_contrast or --lambda_contrast_schedule, not both.")
+    if args.bidirectional_ot_attention and args.ot_prior_mode != "candidate_sparse":
+        raise ValueError(
+            "--bidirectional_ot_attention requires --ot_prior_mode candidate_sparse."
+        )
+    if args.update_interval <= 0:
+        raise ValueError("--update_interval must be positive.")
+
+    seed_everything(int(args.seed))
 
     config_path = Path(args.config)
     config = load_json(config_path)
@@ -387,12 +526,24 @@ def run_mousebrain(args):
         epochs=args.epochs,
         lambda_contrast=args.lambda_contrast,
         device=args.device,
+        update_interval=args.update_interval,
+        attention_topk=args.attention_topk,
+        uot_epsilon=args.uot_epsilon,
+        uot_tau_a=args.uot_tau_a,
+        uot_tau_b=args.uot_tau_b,
+        uot_max_iter=args.uot_max_iter,
+        spatial_knn_k=args.spatial_knn_k,
     )
     lambda_schedule = parse_lambda_contrast_schedule(args.lambda_contrast_schedule)
     epochs = int(model_config["training"]["epochs"])
 
     model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
-    model.initialize_ot_prior(feature_dict, section_order=section_order)
+    initial_prior = initialize_model_ot_prior(
+        model,
+        feature_dict,
+        section_order,
+        args,
+    )
 
     with torch.no_grad():
         dry_outputs = model(
@@ -401,6 +552,7 @@ def run_mousebrain(args):
             processed_data_dict=processed_data_dict,
             section_order=section_order,
             epoch=0,
+            bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
         )
 
     preprocessing_summary = {
@@ -412,6 +564,33 @@ def run_mousebrain(args):
         "lambda_contrast": model_config["loss"]["lambda_contrast"],
         "lambda_contrast_schedule": args.lambda_contrast_schedule,
         "device": model_config["training"]["device"],
+        "seed": int(args.seed),
+        "ot_prior_mode": str(args.ot_prior_mode),
+        "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
+        "candidate_backend": str(args.candidate_backend),
+        "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
+        "candidate_k": int(args.candidate_k),
+        "attention_topk": int(args.attention_topk),
+        "dynamic_candidate_source": str(args.dynamic_candidate_source),
+        "uot_epsilon": float(args.uot_epsilon),
+        "uot_tau_a": float(args.uot_tau_a),
+        "uot_tau_b": float(args.uot_tau_b),
+        "uot_max_iter": int(args.uot_max_iter),
+        "update_interval": int(args.update_interval),
+        "spatial_knn_k": int(args.spatial_knn_k),
+        "graphsage_self_path_mode": str(
+            model_config["graphsage"].get("self_path_mode", "legacy")
+        ),
+        "topology_aware_refresh_enabled": bool(
+            model_config["uot"].get("topology_aware_refresh_enabled", False)
+        ),
+        "topology_context_weight": float(
+            model_config["uot"].get("topology_context_weight", 0.0)
+        ),
+        "initial_ot_prior_metadata": {
+            f"{left}_to_{right}": json_safe(prior.get("metadata", {}))
+            for (left, right), prior in initial_prior.items()
+        },
         "data_dict": summarize_data_dict(prep["data_dict"]),
         "feature_dict": summarize_feature_dict(feature_dict),
         "spatial_loc_dict": summarize_spatial_loc_dict(spatial_loc_dict),
@@ -476,6 +655,7 @@ def run_mousebrain(args):
             processed_data_dict=processed_data_dict,
             section_order=section_order,
             epoch=epoch,
+            bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
         )
         loss = outputs["losses"]["total_loss"]
         optimizer.zero_grad()
@@ -508,8 +688,9 @@ def run_mousebrain(args):
                     processed_data_dict=processed_data_dict,
                     section_order=section_order,
                     epoch=epoch,
+                    bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                 )
-                model.update_ot_prior(eval_outputs["final_embeddings"], section_order=section_order)
+                update_model_ot_prior(model, eval_outputs, section_order, args)
             ot_updates.append(epoch)
             print(f"Updated OT prior at epoch {epoch}.")
 
@@ -526,6 +707,7 @@ def run_mousebrain(args):
             processed_data_dict=processed_data_dict,
             section_order=section_order,
             epoch=epochs,
+            bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
         )
 
     ot_prior_topk_files = {}
@@ -542,6 +724,29 @@ def run_mousebrain(args):
     summary = {
         "mode": "train",
         "epochs": epochs,
+        "seed": int(args.seed),
+        "ot_prior_mode": str(args.ot_prior_mode),
+        "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
+        "candidate_backend": str(args.candidate_backend),
+        "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
+        "candidate_k": int(args.candidate_k),
+        "attention_topk": int(args.attention_topk),
+        "dynamic_candidate_source": str(args.dynamic_candidate_source),
+        "uot_epsilon": float(args.uot_epsilon),
+        "uot_tau_a": float(args.uot_tau_a),
+        "uot_tau_b": float(args.uot_tau_b),
+        "uot_max_iter": int(args.uot_max_iter),
+        "update_interval": int(args.update_interval),
+        "spatial_knn_k": int(args.spatial_knn_k),
+        "graphsage_self_path_mode": str(
+            model_config["graphsage"].get("self_path_mode", "legacy")
+        ),
+        "topology_aware_refresh_enabled": bool(
+            model_config["uot"].get("topology_aware_refresh_enabled", False)
+        ),
+        "topology_context_weight": float(
+            model_config["uot"].get("topology_context_weight", 0.0)
+        ),
         "ot_updates": ot_updates,
         "preprocessing": preprocessing_summary,
         "forward": summarize_outputs(final_outputs),

@@ -145,6 +145,9 @@ def get_default_model_config():
             "input_dim": 128,
             "output_dim": 128,
             "num_layers": 1,
+            # G0-b: retain adjacency self-loops and the outer residual, but
+            # bypass the additional learned GraphSAGE self projection.
+            "self_path_mode": "no_self_linear",
             "dropout": 0.1,
             "activation": "GELU",
             "norm": "LayerNorm",
@@ -156,7 +159,12 @@ def get_default_model_config():
         "uot": {
             "enabled": True,
             "initial_from_modalities": True,
+            # Preserve the original dynamic refresh path: the current final
+            # embeddings, including the OT-attention output, refresh the prior.
             "update_from_final_embedding": True,
+            # The only OT-cost change is a weak self-excluded local-context term.
+            "topology_aware_refresh_enabled": True,
+            "topology_context_weight": 0.2,
             "epsilon_init": 0.08,
             "epsilon_update": 0.05,
             "tau_a": 1.0,
