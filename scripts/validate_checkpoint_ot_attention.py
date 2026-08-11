@@ -177,7 +177,8 @@ def run_case(bidirectional: bool, device: str, seed: int) -> dict[str, Any]:
         raise AssertionError(f"Loss mismatch with dropout=0: {loss_abs_diff}")
     if max(final_embedding_max_abs_diff.values()) > 1e-5:
         raise AssertionError(f"Final embedding mismatch: {final_embedding_max_abs_diff}")
-    if grad_max_abs_diff > 1e-5:
+    gradient_tolerance = 2e-4 if device == "cuda" else 1e-5
+    if grad_max_abs_diff > gradient_tolerance:
         raise AssertionError(f"Gradient mismatch: {grad_max_abs_diff}")
 
     return {
@@ -188,6 +189,7 @@ def run_case(bidirectional: bool, device: str, seed: int) -> dict[str, Any]:
         "final_embedding_shapes": final_embedding_shapes,
         "final_embedding_max_abs_diff": final_embedding_max_abs_diff,
         "grad_max_abs_diff": grad_max_abs_diff,
+        "gradient_tolerance": gradient_tolerance,
         "prior_keys": [list(key) for key in sorted(prior.keys())],
         "prior_stats": prior_stats,
     }

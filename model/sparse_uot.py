@@ -1024,6 +1024,11 @@ def update_candidate_sparse_uot_prior_from_embeddings(
         metadata = {
             "ot_prior_mode": "candidate_sparse",
             "candidate_source": candidate_source,
+            "retrieval_source": candidate_source,
+            "semantic_source": candidate_source,
+            "context_source": (
+                f"{candidate_source}_spatial_context" if context_weight > 0.0 else None
+            ),
             "modalities_used": [modality_label],
             "modality_order": [modality_label],
             "cost_definition": (
@@ -1085,7 +1090,7 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
     max_iter: int = 100,
     stabilizer: float = 1e-8,
     device=None,
-    candidate_source: str = "final",
+    candidate_source: str = "fused",
     context_embedding_dict: Mapping[str, Any] | None = None,
     topology_context_weight: float = 0.0,
 ) -> dict[tuple[str, str], dict[str, Any]]:
@@ -1203,6 +1208,11 @@ def update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
             "ot_prior_mode": "candidate_sparse",
             "bidirectional_ot_attention": True,
             "candidate_source": candidate_source,
+            "retrieval_source": candidate_source,
+            "semantic_source": candidate_source,
+            "context_source": (
+                f"{candidate_source}_spatial_context" if context_weight > 0.0 else None
+            ),
             "modalities_used": [modality_label],
             "modality_order": [modality_label],
             "cost_definition": (

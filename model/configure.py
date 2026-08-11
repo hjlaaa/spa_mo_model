@@ -159,10 +159,11 @@ def get_default_model_config():
         "uot": {
             "enabled": True,
             "initial_from_modalities": True,
-            # Preserve the original dynamic refresh path: the current final
-            # embeddings, including the OT-attention output, refresh the prior.
-            "update_from_final_embedding": True,
-            # The only OT-cost change is a weak self-excluded local-context term.
+            # Dynamic sparse OT uses current pre-GraphSAGE fused semantics and
+            # their self-excluded spatial context.  Explicit callers may still
+            # request the legacy final-embedding refresh path.
+            "update_from_final_embedding": False,
+            "dynamic_refresh_source": "fused",
             "topology_aware_refresh_enabled": True,
             "topology_context_weight": 0.2,
             "epsilon_init": 0.08,
@@ -184,6 +185,7 @@ def get_default_model_config():
         },
         "ot_attention": {
             "enabled": True,
+            "context_gate_enabled": True,
             "direction": "forward",
             "d_attn": 128,
             "beta": 0.2,
@@ -199,6 +201,8 @@ def get_default_model_config():
             "residual": True,
             "norm": "LayerNorm",
             "delta": 1e-8,
+            "context_eps": 1e-8,
+            "context_consistency_backprop_to_alpha": False,
         },
         "decoder": {
             "enabled": True,

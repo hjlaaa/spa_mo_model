@@ -69,7 +69,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dynamic_candidate_source",
         choices=["fused", "final"],
-        default="final",
+        default="fused",
+    )
+    parser.add_argument(
+        "--disable_context_attention_gate",
+        action="store_true",
+        help="Use the v3-compatible 512D attention gate without local-context reliability.",
     )
     parser.add_argument("--uot_epsilon", type=float, default=0.05)
     parser.add_argument("--uot_tau_a", type=float, default=1.0)
@@ -356,6 +361,9 @@ def main() -> None:
             {"device": "cuda", "epochs": args.epochs, "lr": args.lr, "weight_decay": args.weight_decay}
         )
         config["loss"]["lambda_contrast"] = args.lambda_contrast
+        config["ot_attention"]["context_gate_enabled"] = not bool(
+            args.disable_context_attention_gate
+        )
         config["uot"].update(
             {
                 "max_iter": args.uot_max_iter,
@@ -430,6 +438,7 @@ def main() -> None:
             "faiss_train_sample_size": args.faiss_train_sample_size,
             "faiss_query_batch_size": args.faiss_query_batch_size,
             "dynamic_candidate_source": args.dynamic_candidate_source,
+            "attention_context_gate_enabled": not args.disable_context_attention_gate,
             "uot_epsilon": args.uot_epsilon,
             "uot_tau_a": args.uot_tau_a,
             "uot_tau_b": args.uot_tau_b,

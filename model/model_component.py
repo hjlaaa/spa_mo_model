@@ -279,6 +279,92 @@ class WeightedResidualGraphSAGE(nn.Module):
         return out, diagnostics
 
 
+def spatial_pool_self_excluded(
+    z: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_weight: torch.Tensor,
+    *,
+    edge_batch_size: int | None = 200000,
+    eps: float = 1e-8,
+    l2_normalize: bool = True,
+) -> torch.Tensor:
+    """Return a detached, self-excluded weighted spatial-neighbor mean.
+
+    The aggregation deliberately uses two edge-batched passes: the first
+    recomputes per-source weight sums after self-loop removal and the second
+    accumulates weighted neighbor embeddings.  It therefore never materializes
+    a full ``[E, D]`` message tensor.  When ``l2_normalize`` is enabled, node
+    chunks are normalized in place so a second full context matrix is not kept
+    alive.
+    """
+
+    if z.ndim != 2 or z.shape[0] == 0:
+        raise ValueError(f"z must be a non-empty 2D tensor, got {tuple(z.shape)}.")
+    if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+        raise ValueError("edge_index must have shape [2, E].")
+    if edge_weight.ndim != 1 or edge_weight.shape[0] != edge_index.shape[1]:
+        raise ValueError("edge_weight must have shape [E].")
+    if eps <= 0.0:
+        raise ValueError("eps must be positive.")
+
+    embedding = z.detach()
+    source = edge_index[0].to(device=embedding.device)
+    target = edge_index[1].to(device=embedding.device)
+    num_edges = int(source.shape[0])
+    batch_size = int(edge_batch_size or 200000)
+    if batch_size <= 0:
+        batch_size = 200000
+
+    # FP32 row sums avoid BF16 underflow while adding only O(N) storage.
+    row_sum = torch.zeros(
+        embedding.shape[0],
+        device=embedding.device,
+        dtype=torch.float32,
+    )
+    for start in range(0, num_edges, batch_size):
+        end = min(start + batch_size, num_edges)
+        source_b = source[start:end]
+        target_b = target[start:end]
+        keep_b = source_b != target_b
+        source_b = source_b[keep_b]
+        weight_b = edge_weight[start:end].to(
+            device=embedding.device,
+            dtype=torch.float32,
+        )[keep_b]
+        row_sum.index_add_(0, source_b, weight_b)
+
+    context = torch.zeros_like(embedding)
+    for start in range(0, num_edges, batch_size):
+        end = min(start + batch_size, num_edges)
+        source_b = source[start:end]
+        target_b = target[start:end]
+        keep_b = source_b != target_b
+        source_b = source_b[keep_b]
+        target_b = target_b[keep_b]
+        weight_b = edge_weight[start:end].to(
+            device=embedding.device,
+            dtype=torch.float32,
+        )[keep_b]
+        normalized_weight_b = weight_b / row_sum[source_b].clamp_min(float(eps))
+        message_b = embedding[target_b] * normalized_weight_b.to(
+            dtype=embedding.dtype
+        ).unsqueeze(-1)
+        context.index_add_(0, source_b, message_b)
+
+    if l2_normalize:
+        num_nodes = int(context.shape[0])
+        for start in range(0, num_nodes, batch_size):
+            end = min(start + batch_size, num_nodes)
+            context_b = context[start:end]
+            norm_b = torch.linalg.vector_norm(
+                context_b.float(),
+                dim=1,
+                keepdim=True,
+            ).clamp_min(float(eps))
+            context[start:end] = (context_b.float() / norm_b).to(context.dtype)
+    return context.detach()
+
+
 class OTGuidedAttention(nn.Module):
     """Single-direction top-k OT-guided cross-stage attention."""
 
@@ -295,12 +381,14 @@ class OTGuidedAttention(nn.Module):
         residual: bool = True,
         norm: str | None = "LayerNorm",
         delta: float = 1e-8,
+        context_gate_enabled: bool = True,
+        context_consistency_backprop_to_alpha: bool = False,
     ):
         super().__init__()
         if d_attn != dim:
             raise ValueError(
                 "OTGuidedAttention currently requires d_attn == dim because the scalar gate "
-                "uses [source_h, message, source_h - message, source_h * message]. "
+                "uses [source_h, message, source_h - message, source_h * message, r_ctx]. "
                 "Please keep d_attn equal to dim unless the gate design is changed."
             )
         if gate != "scalar":
@@ -313,13 +401,17 @@ class OTGuidedAttention(nn.Module):
         self.use_confidence = bool(use_confidence)
         self.residual = bool(residual)
         self.delta = float(delta)
+        self.context_gate_enabled = bool(context_gate_enabled)
+        self.context_consistency_backprop_to_alpha = bool(
+            context_consistency_backprop_to_alpha
+        )
         self.W_Q = nn.Linear(self.dim, self.d_attn)
         self.W_K = nn.Linear(self.dim, self.d_attn)
         self.W_V = nn.Linear(self.dim, self.d_attn)
         self.W_O = nn.Linear(self.d_attn, self.dim)
         self.dropout = nn.Dropout(dropout)
         self.gate_mlp = nn.Sequential(
-            nn.Linear(4 * self.dim, self.dim),
+            nn.Linear(4 * self.dim + (1 if self.context_gate_enabled else 0), self.dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(self.dim, 1),
@@ -342,6 +434,8 @@ class OTGuidedAttention(nn.Module):
         topk_idx: torch.Tensor,
         topk_weight: torch.Tensor,
         confidence: torch.Tensor,
+        source_context: torch.Tensor,
+        target_context: torch.Tensor,
         epoch: int | None = None,
         source_chunk_size: int | None = None,
         checkpoint_attention: bool = False,
@@ -352,6 +446,8 @@ class OTGuidedAttention(nn.Module):
             topk_idx=topk_idx,
             topk_weight=topk_weight,
             confidence=confidence,
+            source_context=source_context,
+            target_context=target_context,
             epoch=epoch,
             source_chunk_size=source_chunk_size,
             checkpoint_attention=checkpoint_attention,
@@ -365,6 +461,8 @@ class OTGuidedAttention(nn.Module):
         topk_idx: torch.Tensor,
         topk_weight: torch.Tensor,
         confidence: torch.Tensor,
+        source_context: torch.Tensor,
+        target_context: torch.Tensor,
         epoch: int | None = None,
         source_chunk_size: int | None = None,
         checkpoint_attention: bool = False,
@@ -380,6 +478,24 @@ class OTGuidedAttention(nn.Module):
         topk_weight = topk_weight.to(device=source_h.device, dtype=source_h.dtype)
         confidence = confidence.to(device=source_h.device, dtype=source_h.dtype)
         target_h = target_h.to(source_h.device)
+        if self.context_gate_enabled:
+            source_context = source_context.detach().to(device=source_h.device)
+            target_context = target_context.detach().to(device=source_h.device)
+            if source_context.shape != source_h.shape:
+                raise ValueError(
+                    "source_context must match source_h shape; "
+                    f"got {tuple(source_context.shape)} vs {tuple(source_h.shape)}."
+                )
+            if target_context.shape != target_h.shape:
+                raise ValueError(
+                    "target_context must match target_h shape; "
+                    f"got {tuple(target_context.shape)} vs {tuple(target_h.shape)}."
+                )
+        else:
+            # Keep tensor placeholders in the checkpoint signature while the
+            # v3-compatible 512-dimensional gate ignores spatial context.
+            source_context = source_context.to(device=source_h.device)
+            target_context = target_context.to(device=source_h.device)
 
         use_checkpoint = bool(
             checkpoint_attention
@@ -399,6 +515,8 @@ class OTGuidedAttention(nn.Module):
                         topk_idx=topk_idx[start:end],
                         topk_weight=topk_weight[start:end],
                         confidence=confidence[start:end],
+                        source_context=source_context[start:end],
+                        target_context=target_context,
                         epoch=epoch,
                         use_checkpoint=use_checkpoint,
                     )
@@ -411,6 +529,8 @@ class OTGuidedAttention(nn.Module):
             topk_idx=topk_idx,
             topk_weight=topk_weight,
             confidence=confidence,
+            source_context=source_context,
+            target_context=target_context,
             epoch=epoch,
             use_checkpoint=use_checkpoint,
         )
@@ -422,6 +542,8 @@ class OTGuidedAttention(nn.Module):
         topk_idx: torch.Tensor,
         topk_weight: torch.Tensor,
         confidence: torch.Tensor,
+        source_context: torch.Tensor,
+        target_context: torch.Tensor,
         epoch: int | None = None,
         use_checkpoint: bool = False,
     ) -> torch.Tensor:
@@ -432,6 +554,8 @@ class OTGuidedAttention(nn.Module):
                 topk_idx=topk_idx,
                 topk_weight=topk_weight,
                 confidence=confidence,
+                source_context=source_context,
+                target_context=target_context,
                 epoch=epoch,
             )
 
@@ -440,6 +564,8 @@ class OTGuidedAttention(nn.Module):
             target_h_full: torch.Tensor,
             topk_weight_chunk: torch.Tensor,
             confidence_chunk: torch.Tensor,
+            source_context_chunk: torch.Tensor,
+            target_context_full: torch.Tensor,
         ) -> torch.Tensor:
             return self._compute_update_chunk(
                 source_h=source_h_chunk,
@@ -447,6 +573,8 @@ class OTGuidedAttention(nn.Module):
                 topk_idx=topk_idx,
                 topk_weight=topk_weight_chunk,
                 confidence=confidence_chunk,
+                source_context=source_context_chunk,
+                target_context=target_context_full,
                 epoch=epoch,
             )
 
@@ -456,6 +584,8 @@ class OTGuidedAttention(nn.Module):
             target_h,
             topk_weight,
             confidence,
+            source_context,
+            target_context,
             use_reentrant=False,
             preserve_rng_state=True,
         )
@@ -467,6 +597,8 @@ class OTGuidedAttention(nn.Module):
         topk_idx: torch.Tensor,
         topk_weight: torch.Tensor,
         confidence: torch.Tensor,
+        source_context: torch.Tensor,
+        target_context: torch.Tensor,
         epoch: int | None = None,
     ) -> torch.Tensor:
         q = self.W_Q(source_h)
@@ -482,16 +614,68 @@ class OTGuidedAttention(nn.Module):
         message = (alpha.unsqueeze(-1) * v).sum(dim=1)
         message_bar = self.W_O(message)
 
-        gate_input = torch.cat(
-            [source_h, message_bar, source_h - message_bar, source_h * message_bar],
-            dim=-1,
-        )
+        gate_features = [
+            source_h,
+            message_bar,
+            source_h - message_bar,
+            source_h * message_bar,
+        ]
+        if self.context_gate_enabled:
+            r_ctx = self.compute_context_reliability(
+                alpha=alpha,
+                source_context=source_context,
+                target_context=target_context,
+                topk_idx=topk_idx,
+                topk_weight=topk_weight,
+            ).to(dtype=source_h.dtype)
+            gate_features.append(r_ctx)
+        gate_input = torch.cat(gate_features, dim=-1)
         gate = self.gate_mlp(gate_input)
         if self.use_confidence:
             update_scale = confidence.unsqueeze(-1) * gate
         else:
             update_scale = gate
         return update_scale * message_bar
+
+    def compute_context_reliability(
+        self,
+        *,
+        alpha: torch.Tensor,
+        source_context: torch.Tensor,
+        target_context: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute attention-weighted top-k context reliability ``[N, 1]``.
+
+        Section contexts are already detached and L2-normalized by the spatial
+        pooling branch.  Dot products are accumulated in FP32.  Zero-weight
+        padded candidates receive neutral reliability (0.5), preventing their
+        repeated index from injecting an arbitrary context value without
+        changing the existing attention-score behavior.
+        """
+
+        candidate_context = target_context[topk_idx]
+        # FP32 batched matrix-vector multiplication preserves FP32 dot-product
+        # accumulation without materializing another [chunk, K, D] product.
+        cosine = torch.bmm(
+            candidate_context.float(),
+            source_context.float().unsqueeze(-1),
+        ).squeeze(-1)
+        cosine = cosine.clamp(min=-1.0, max=1.0)
+        pairwise_reliability = 0.5 * (1.0 + cosine)
+        valid_candidate = topk_weight.float() > 0.0
+        pairwise_reliability = torch.where(
+            valid_candidate,
+            pairwise_reliability,
+            torch.full_like(pairwise_reliability, 0.5),
+        )
+        reliability = (
+            alpha.float() * pairwise_reliability
+        ).sum(dim=1, keepdim=True)
+        if not self.context_consistency_backprop_to_alpha:
+            reliability = reliability.detach()
+        return reliability
 
     def apply_update(self, source_h: torch.Tensor, update: torch.Tensor) -> torch.Tensor:
         """Apply the residual/dropout/norm step to a precomputed update."""

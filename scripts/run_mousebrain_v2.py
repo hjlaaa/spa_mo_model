@@ -73,7 +73,12 @@ def parse_args():
     parser.add_argument(
         "--dynamic_candidate_source",
         choices=["fused", "final"],
-        default="final",
+        default="fused",
+    )
+    parser.add_argument(
+        "--disable_context_attention_gate",
+        action="store_true",
+        help="Use the v3-compatible 512D attention gate without local-context reliability.",
     )
     parser.add_argument("--uot_epsilon", type=float, default=0.05)
     parser.add_argument("--uot_tau_a", type=float, default=1.0)
@@ -330,6 +335,7 @@ def build_model_config(
     uot_tau_b: float = 1.0,
     uot_max_iter: int = 100,
     spatial_knn_k: int = 5,
+    context_gate_enabled: bool = True,
 ):
     model_config = get_default_model_config()
     training = config.get("training", {})
@@ -357,6 +363,7 @@ def build_model_config(
         }
     )
     model_config["graph"]["knn_neighbors_spatial"] = int(spatial_knn_k)
+    model_config["ot_attention"]["context_gate_enabled"] = bool(context_gate_enabled)
     return model_config
 
 
@@ -533,6 +540,7 @@ def run_mousebrain(args):
         uot_tau_b=args.uot_tau_b,
         uot_max_iter=args.uot_max_iter,
         spatial_knn_k=args.spatial_knn_k,
+        context_gate_enabled=not args.disable_context_attention_gate,
     )
     lambda_schedule = parse_lambda_contrast_schedule(args.lambda_contrast_schedule)
     epochs = int(model_config["training"]["epochs"])
@@ -572,6 +580,7 @@ def run_mousebrain(args):
         "candidate_k": int(args.candidate_k),
         "attention_topk": int(args.attention_topk),
         "dynamic_candidate_source": str(args.dynamic_candidate_source),
+        "attention_context_gate_enabled": not args.disable_context_attention_gate,
         "uot_epsilon": float(args.uot_epsilon),
         "uot_tau_a": float(args.uot_tau_a),
         "uot_tau_b": float(args.uot_tau_b),
@@ -732,6 +741,7 @@ def run_mousebrain(args):
         "candidate_k": int(args.candidate_k),
         "attention_topk": int(args.attention_topk),
         "dynamic_candidate_source": str(args.dynamic_candidate_source),
+        "attention_context_gate_enabled": not args.disable_context_attention_gate,
         "uot_epsilon": float(args.uot_epsilon),
         "uot_tau_a": float(args.uot_tau_a),
         "uot_tau_b": float(args.uot_tau_b),

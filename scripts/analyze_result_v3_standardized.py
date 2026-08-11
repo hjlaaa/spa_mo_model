@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 from datetime import datetime
@@ -28,6 +29,10 @@ SCRIPT_PATH = Path(__file__).resolve()
 
 def _run(dataset: str) -> Path:
     return RESULT_ROOT / dataset / RUN_NAME
+
+
+def _method_name() -> str:
+    return f"spa_mo_model_{RESULT_ROOT.name}"
 
 
 def _paired_rna_adt_data(module, dataset: str):
@@ -62,7 +67,7 @@ def _paired_rna_adt_data(module, dataset: str):
         coords.append(spatial)
         sources.extend([embedding_path, index_path, spatial_path, rna_path])
     return module.MethodData(
-        "spa_mo_model_v3",
+        _method_name(),
         np.vstack(arrays),
         np.asarray(sections, dtype=str),
         np.asarray(barcodes, dtype=str),
@@ -97,7 +102,7 @@ def _misar_data():
     barcode_array = np.asarray(barcodes, dtype=str)
     coords, truth = misar.aligned_metadata(data_dir, section_array, barcode_array)
     return misar.MethodData(
-        "spa_mo_model_v3",
+        _method_name(),
         np.vstack(arrays),
         section_array,
         barcode_array,
@@ -148,7 +153,7 @@ def _thymus_data():
         thymus, "mouse_thymus", "Mouse_Thymus"
     )
     return thymus.MethodData(
-        "spa_mo_model_v3",
+        _method_name(),
         embedding,
         sections,
         barcodes,
@@ -184,7 +189,7 @@ def _simulation_data():
         coords.append(metadata[["spatial_x", "spatial_y"]].to_numpy(float))
         sources.extend([embedding_path, metadata_path])
     return simulation.MethodData(
-        "spa_mo_model_v3",
+        _method_name(),
         np.vstack(arrays),
         np.asarray(sections, dtype=str),
         np.asarray(barcodes, dtype=str),
@@ -229,12 +234,36 @@ def _annotate(output: Path, dataset: str, removed: list[str]) -> dict:
             if "_k" in Path(path).name
         }
     )
+    run_summary_path = output.parent / "run_summary.json"
+    run_summary = (
+        json.loads(run_summary_path.read_text())
+        if run_summary_path.is_file()
+        else {}
+    )
+    dynamic_source = run_summary.get("dynamic_candidate_source", "fused")
+    context_gate_enabled = bool(
+        run_summary.get("attention_context_gate_enabled", True)
+    )
+    semantic_source = dynamic_source
+    context_source = f"{dynamic_source}_spatial_context"
+    if dynamic_source == "final" and context_gate_enabled:
+        model_variant = "microenvironment_attention_gate_with_v3_dynamic_ot"
+    elif dynamic_source == "fused" and not context_gate_enabled:
+        model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
+    else:
+        model_variant = "microenvironment_aware_bidirectional_sparse_uot_fixed_lc0.1"
     config.update(
         {
             "training_seed": 42,
-            "model_variant": "bidirectional_sparse_uot_fixed_lc0.1",
+            "model_variant": model_variant,
             "graphsage_self_path_mode": "no_self_linear",
-            "dynamic_candidate_source": "final",
+            "dynamic_candidate_source": dynamic_source,
+            "dynamic_semantic_source": semantic_source,
+            "dynamic_context_source": context_source,
+            "attention_context_source": (
+                "fused_spatial_context" if context_gate_enabled else None
+            ),
+            "attention_context_gate_enabled": context_gate_enabled,
             "dynamic_ot_cost": (
                 "0.8 * semantic cosine cost + 0.2 * local-context cosine cost"
             ),
@@ -252,11 +281,23 @@ def _annotate(output: Path, dataset: str, removed: list[str]) -> dict:
         "analysis": str(output / SCHEME),
         "n_obs": int(config["n_obs"]),
         "retained_k": retained,
+        "dynamic_candidate_source": dynamic_source,
+        "attention_context_gate_enabled": context_gate_enabled,
         "removed_intermediate_directory_count": len(removed),
     }
 
 
 def main() -> None:
+    global RESULT_ROOT
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--result-root",
+        type=Path,
+        default=RESULT_ROOT,
+        help="Result root containing the five standardized dataset runs.",
+    )
+    args = parser.parse_args()
+    RESULT_ROOT = args.result_root.resolve()
     manifests: list[dict] = []
 
     hln_data = _paired_rna_adt_data(hln, "human_lymph_node")
@@ -304,12 +345,26 @@ def main() -> None:
     manifests.append(_annotate(simulation_data.output_root, "Simulation", []))
     print("Simulation standardized analysis: PASS", flush=True)
 
+    manifest_dynamic_source = manifests[0]["dynamic_candidate_source"]
+    manifest_context_gate_enabled = manifests[0]["attention_context_gate_enabled"]
+    if manifest_dynamic_source == "final" and manifest_context_gate_enabled:
+        manifest_model_variant = "microenvironment_attention_gate_with_v3_dynamic_ot"
+    elif manifest_dynamic_source == "fused" and not manifest_context_gate_enabled:
+        manifest_model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
+    else:
+        manifest_model_variant = "microenvironment_aware_bidirectional_sparse_uot_fixed_lc0.1"
     manifest = {
         "analysis": "standardized_embedding_only",
         "training_seed": 42,
-        "model_variant": "bidirectional_sparse_uot_fixed_lc0.1",
+        "model_variant": manifest_model_variant,
         "graphsage_self_path_mode": "no_self_linear",
-        "dynamic_candidate_source": "final",
+        "dynamic_candidate_source": manifest_dynamic_source,
+        "dynamic_semantic_source": manifest_dynamic_source,
+        "dynamic_context_source": f"{manifest_dynamic_source}_spatial_context",
+        "attention_context_source": (
+            "fused_spatial_context" if manifest_context_gate_enabled else None
+        ),
+        "attention_context_gate_enabled": manifest_context_gate_enabled,
         "dynamic_ot_cost": (
             "0.8 * semantic cosine cost + 0.2 * local-context cosine cost"
         ),
@@ -319,7 +374,7 @@ def main() -> None:
     path = RESULT_ROOT / "five_dataset_standardized_analysis_manifest.json"
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
-    print("RESULT_V3_FIVE_DATASET_STANDARDIZED_ANALYSIS: PASS")
+    print(f"{RESULT_ROOT.name.upper()}_FIVE_DATASET_STANDARDIZED_ANALYSIS: PASS")
 
 
 if __name__ == "__main__":

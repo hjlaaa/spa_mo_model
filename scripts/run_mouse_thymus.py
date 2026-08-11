@@ -15,7 +15,7 @@ import pandas as pd
 ORIGINAL = Path(__file__).with_name("run_misar_seq.py")
 DATA_DIR = Path("/home/hujinlan/spa_mo_model/data/Mouse_Thymus")
 OUTPUT_DIR = Path(
-    "/home/hujinlan/spa_mo_model/result_v3/mouse_thymus/"
+    "/home/hujinlan/spa_mo_model/result_v4/mouse_thymus/"
     "bidirectional_sparse_uot_fixed_lc0.1_seed42"
 )
 SECTIONS = [f"Mouse_Thymus{i}" for i in range(1, 5)]

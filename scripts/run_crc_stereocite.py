@@ -110,11 +110,16 @@ def parse_args():
     parser.add_argument(
         "--dynamic_candidate_source",
         choices=["fused", "final"],
-        default="final",
+        default="fused",
         help=(
-            "Embedding used for dynamic OT refresh. final preserves the original "
-            "final-embedding refresh path."
+            "Embedding used for dynamic OT refresh. fused is the microenvironment-aware "
+            "default; final keeps the legacy compatibility path."
         ),
+    )
+    parser.add_argument(
+        "--disable_context_attention_gate",
+        action="store_true",
+        help="Use the v3-compatible 512D attention gate without local-context reliability.",
     )
     parser.add_argument("--uot_epsilon", type=float, default=0.05)
     parser.add_argument("--uot_tau_a", type=float, default=1.0)
@@ -1161,6 +1166,9 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         model_config["training"]["epochs"] = int(args.epochs)
         model_config["training"]["lr"] = float(args.lr)
         model_config["training"]["weight_decay"] = float(args.weight_decay)
+        model_config["ot_attention"]["context_gate_enabled"] = not bool(
+            args.disable_context_attention_gate
+        )
         if args.lambda_contrast is not None:
             model_config["loss"]["lambda_contrast"] = float(args.lambda_contrast)
         model_config["uot"]["max_iter"] = int(args.uot_max_iter)
@@ -1339,6 +1347,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 else None
             ),
             "dynamic_candidate_source": args.dynamic_candidate_source,
+            "attention_context_gate_enabled": not args.disable_context_attention_gate,
             "uot_epsilon": float(args.uot_epsilon),
             "uot_tau_a": float(args.uot_tau_a),
             "uot_tau_b": float(args.uot_tau_b),

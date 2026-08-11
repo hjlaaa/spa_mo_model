@@ -14,7 +14,7 @@ import run_human_lymph_node as shared
 ORIGINAL = Path(__file__).with_name("run_crc_stereocite.py")
 DATA_DIR = Path("/home/hujinlan/spa_mo_model/data/Mouse_Spleen")
 OUTPUT_DIR = Path(
-    "/home/hujinlan/spa_mo_model/result_v3/mouse_spleen/"
+    "/home/hujinlan/spa_mo_model/result_v4/mouse_spleen/"
     "bidirectional_sparse_uot_fixed_lc0.1_seed42"
 )
 

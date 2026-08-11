@@ -23,6 +23,7 @@ from .model_component import (
     ModalityMLPEncoder,
     OTGuidedAttention,
     WeightedResidualGraphSAGE,
+    spatial_pool_self_excluded,
 )
 from .sparse_uot import (
     compute_initial_bidirectional_candidate_sparse_uot_prior,
@@ -142,7 +143,7 @@ def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
 
     ``                context_embedding_dict=contexts, topology_context_weight=0.2,``
 
-    ``                embedding_source="final")``
+    ``                embedding_source="fused")``
     """
 
     return epoch > 0 and epoch % update_interval == 0
@@ -152,6 +153,7 @@ def compute_self_excluded_spatial_context(
     embedding_dict: Mapping[str, torch.Tensor],
     spatial_graph_dict: Mapping[str, Mapping[str, torch.Tensor]],
     delta: float = 1e-8,
+    edge_batch_size: int | None = 200000,
 ) -> tuple[dict[str, torch.Tensor], dict[str, dict[str, float]]]:
     """Aggregate detached local neighbors after removing graph self-loops.
 
@@ -181,7 +183,6 @@ def compute_self_excluded_spatial_context(
 
         source = edge_index[0].to(device=embedding.device)
         target = edge_index[1].to(device=embedding.device)
-        weight = edge_weight.to(device=embedding.device, dtype=embedding.dtype)
         if source.numel() and (
             int(source.min()) < 0
             or int(target.min()) < 0
@@ -191,28 +192,16 @@ def compute_self_excluded_spatial_context(
             raise ValueError(f"O2-c0 spatial graph contains out-of-range indices for {section}.")
 
         keep = source != target
-        source = source[keep]
-        target = target[keep]
-        weight = weight[keep]
-        if source.numel() == 0:
+        nonself_source = source[keep]
+        if nonself_source.numel() == 0:
             raise ValueError(f"O2-c0 spatial graph for {section} has no non-self edges.")
-
-        row_sum = torch.zeros(
-            embedding.shape[0],
-            device=embedding.device,
-            dtype=embedding.dtype,
-        )
-        row_sum.index_add_(0, source, weight)
-        if bool((row_sum <= float(delta)).any()):
-            raise ValueError(
-                f"O2-c0 spatial graph for {section} contains a spot without a non-self neighbor."
-            )
-        normalized_weight = weight / row_sum[source].clamp_min(float(delta))
-        context = torch.zeros_like(embedding)
-        context.index_add_(
-            0,
-            source,
-            embedding[target] * normalized_weight.unsqueeze(-1),
+        context = spatial_pool_self_excluded(
+            embedding,
+            edge_index,
+            edge_weight,
+            edge_batch_size=edge_batch_size,
+            eps=float(delta),
+            l2_normalize=True,
         )
         contexts[str(section)] = context.detach()
 
@@ -222,12 +211,11 @@ def compute_self_excluded_spatial_context(
             dim=1,
             eps=float(delta),
         )
-        post_row_sum = torch.zeros_like(row_sum)
-        post_row_sum.index_add_(0, source, normalized_weight)
         diagnostics[str(section)] = {
-            "nonself_edge_count": float(source.numel()),
-            "neighbors_per_spot_mean": float(source.numel() / max(int(embedding.shape[0]), 1)),
-            "post_exclusion_row_sum_min": float(post_row_sum.min().cpu()),
+            "nonself_edge_count": float(nonself_source.numel()),
+            "neighbors_per_spot_mean": float(
+                nonself_source.numel() / max(int(embedding.shape[0]), 1)
+            ),
             "embedding_context_cosine_mean": float(cosine.mean().cpu()),
             "embedding_context_cosine_std": float(cosine.std(unbiased=False).cpu()),
         }
@@ -330,6 +318,10 @@ class StageMultiModalModel(nn.Module):
             residual=bool(attn_cfg["residual"]),
             norm=attn_cfg["norm"],
             delta=float(attn_cfg["delta"]),
+            context_gate_enabled=bool(attn_cfg.get("context_gate_enabled", True)),
+            context_consistency_backprop_to_alpha=bool(
+                attn_cfg.get("context_consistency_backprop_to_alpha", False)
+            ),
         )
 
         if feature_dict is not None:
@@ -627,7 +619,9 @@ class StageMultiModalModel(nn.Module):
         """Prepare detached semantic and local-context inputs for OT refresh."""
 
         uot_cfg = self.config["uot"]
-        source = str(refresh_source or "final")
+        source = str(
+            refresh_source or uot_cfg.get("dynamic_refresh_source", "fused")
+        )
         output_key_by_source = {
             "final": "final_embeddings",
             "fused": "fused_embeddings",
@@ -657,19 +651,48 @@ class StageMultiModalModel(nn.Module):
         contexts: dict[str, torch.Tensor] | None = None
         context_diagnostics: dict[str, dict[str, float]] = {}
         if topology_enabled and context_weight > 0.0:
-            spatial_graphs = outputs.get("spatial_graph_dict")
-            if not isinstance(spatial_graphs, Mapping):
-                raise KeyError(
-                    "O2-c0 requires spatial_graph_dict in the full forward outputs."
+            fused_contexts = outputs.get("context_embeddings")
+            if source == "fused" and isinstance(fused_contexts, Mapping):
+                contexts = {}
+                missing_contexts = [
+                    section for section in embeddings if section not in fused_contexts
+                ]
+                if missing_contexts:
+                    raise KeyError(
+                        f"Missing fused spatial contexts for sections: {missing_contexts}"
+                    )
+                for section in embeddings:
+                    value = fused_contexts[section]
+                    if not isinstance(value, torch.Tensor):
+                        raise TypeError(
+                            f"OT prior refresh context for {section} is not a tensor."
+                        )
+                    if value.shape != embeddings[str(section)].shape:
+                        raise ValueError(
+                            f"OT prior refresh context shape for {section} is "
+                            f"{tuple(value.shape)}, expected {tuple(embeddings[str(section)].shape)}."
+                        )
+                    contexts[str(section)] = value.detach()
+            else:
+                spatial_graphs = outputs.get("spatial_graph_dict")
+                if not isinstance(spatial_graphs, Mapping):
+                    raise KeyError(
+                        "OT context refresh requires spatial_graph_dict in full outputs."
+                    )
+                contexts, context_diagnostics = compute_self_excluded_spatial_context(
+                    embeddings,
+                    spatial_graphs,
+                    delta=float(self.config["ot_attention"]["delta"]),
+                    edge_batch_size=self.config["graphsage"].get(
+                        "edge_batch_size", 200000
+                    ),
                 )
-            contexts, context_diagnostics = compute_self_excluded_spatial_context(
-                embeddings,
-                spatial_graphs,
-                delta=float(self.config["ot_attention"]["delta"]),
-            )
 
         diagnostics: dict[str, Any] = {
             "refresh_source": source,
+            "retrieval_source": source,
+            "semantic_source": source,
+            "context_source": f"{source}_spatial_context",
             "topology_aware_refresh_enabled": topology_enabled,
             "topology_context_weight": context_weight if topology_enabled else 0.0,
             "context": context_diagnostics,
@@ -931,6 +954,7 @@ class StageMultiModalModel(nn.Module):
         )
 
         fused_embeddings: dict[str, torch.Tensor] = {}
+        context_embeddings: dict[str, torch.Tensor] = {}
         graphsage_embeddings: dict[str, torch.Tensor] = {}
         final_embeddings: dict[str, torch.Tensor] = {}
         latent_dict: dict[str, dict[str, torch.Tensor]] = {}
@@ -1106,6 +1130,39 @@ class StageMultiModalModel(nn.Module):
             if keep_full_outputs:
                 fused_embeddings[section] = fused
 
+            context_gate_enabled = bool(
+                self.config["ot_attention"].get("context_gate_enabled", True)
+            )
+            need_spatial_context = context_gate_enabled or (
+                keep_full_outputs
+                and not self.training
+                and bool(self.config["uot"].get("topology_aware_refresh_enabled", False))
+                and float(self.config["uot"].get("topology_context_weight", 0.0)) > 0.0
+            )
+            if need_spatial_context:
+                context_embeddings[section] = spatial_pool_self_excluded(
+                    fused.detach(),
+                    edge_index,
+                    edge_weight,
+                    edge_batch_size=graph_sage_cfg.get("edge_batch_size", 200000),
+                    eps=float(self.config["ot_attention"].get("context_eps", 1e-8)),
+                    l2_normalize=True,
+                )
+                _record_forward_memory(
+                    memory_recorder,
+                    f"section_{section}_spatial_context_end",
+                    {
+                        "section": section,
+                        "context_shape": list(context_embeddings[section].shape),
+                        "context_requires_grad": bool(
+                            context_embeddings[section].requires_grad
+                        ),
+                        "edge_batch_size": int(
+                            graph_sage_cfg.get("edge_batch_size", 200000) or 200000
+                        ),
+                    },
+                )
+
             if graph_sage_cfg["enabled"]:
                 if use_graph_encoder_checkpoint:
                     graphsage_embeddings[section] = _checkpoint_graph_encoder_forward(
@@ -1150,6 +1207,14 @@ class StageMultiModalModel(nn.Module):
                     topk_idx=prior["topk_idx"],
                     topk_weight=prior["topk_weight"],
                     confidence=prior["confidence"],
+                    source_context=context_embeddings.get(
+                        source_section,
+                        graphsage_embeddings[source_section].new_empty(0),
+                    ),
+                    target_context=context_embeddings.get(
+                        target_section,
+                        graphsage_embeddings[target_section].new_empty(0),
+                    ),
                     epoch=epoch,
                     source_chunk_size=ot_attention_source_chunk_size,
                     checkpoint_attention=checkpoint_ot_attention,
@@ -1200,6 +1265,14 @@ class StageMultiModalModel(nn.Module):
                     topk_idx=prior["topk_idx"],
                     topk_weight=prior["topk_weight"],
                     confidence=prior["confidence"],
+                    source_context=context_embeddings.get(
+                        source_section,
+                        graphsage_embeddings[source_section].new_empty(0),
+                    ),
+                    target_context=context_embeddings.get(
+                        target_section,
+                        graphsage_embeddings[target_section].new_empty(0),
+                    ),
                     epoch=epoch,
                     source_chunk_size=ot_attention_source_chunk_size,
                     checkpoint_attention=checkpoint_ot_attention,
@@ -1275,6 +1348,7 @@ class StageMultiModalModel(nn.Module):
 
         return {
             "fused_embeddings": fused_embeddings,
+            "context_embeddings": context_embeddings,
             "graphsage_embeddings": graphsage_embeddings,
             "final_embeddings": final_embeddings,
             "latent_dict": latent_dict,
