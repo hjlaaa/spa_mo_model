@@ -265,6 +265,28 @@ class StageMultiModalModel(nn.Module):
         self.config = _recursive_update(get_default_model_config(), config)
         self.latent_dim = int(self.config["model"]["latent_dim"])
         self.canonical_modality_order = tuple(self.config["model"]["modalities_supported"])
+        single_cfg = self.config["model"].get("single_modality_mode", {})
+        if not isinstance(single_cfg, Mapping):
+            raise TypeError("model.single_modality_mode must be a mapping.")
+        self.single_modality_enabled = bool(single_cfg.get("enabled", False))
+        configured_single_modality = single_cfg.get("modality")
+        self.configured_single_modality = (
+            None if configured_single_modality in (None, "") else str(configured_single_modality)
+        )
+        if self.configured_single_modality is not None and not self.single_modality_enabled:
+            raise ValueError(
+                "model.single_modality_mode.modality requires "
+                "model.single_modality_mode.enabled=true."
+            )
+        if (
+            self.configured_single_modality is not None
+            and self.configured_single_modality not in self.canonical_modality_order
+        ):
+            raise ValueError(
+                "model.single_modality_mode.modality must be one of "
+                f"{list(self.canonical_modality_order)} or None; got "
+                f"{self.configured_single_modality!r}."
+            )
         self.valid_modality_sets = [
             tuple(
                 modality
@@ -354,9 +376,29 @@ class StageMultiModalModel(nn.Module):
         unknown = sorted(present - set(self.canonical_modality_order))
         if unknown:
             raise ValueError(f"Unsupported modalities present in section: {unknown}.")
-        if len(present) < 2:
+        if not present:
+            raise ValueError("Each section must contain at least one real observed modality.")
+        if len(present) == 1:
+            modality = next(iter(present))
+            if not self.single_modality_enabled:
+                raise ValueError(
+                    "A section contains only one observed modality, but single-modality mode is "
+                    "disabled. Set model.single_modality_mode.enabled=true to opt in; got "
+                    f"{sorted(present)}."
+                )
+            if (
+                self.configured_single_modality is not None
+                and modality != self.configured_single_modality
+            ):
+                raise ValueError(
+                    "Single-modality input does not match the configured branch: "
+                    f"got {modality!r}, expected {self.configured_single_modality!r}."
+                )
+            return (modality,)
+        if self.configured_single_modality is not None:
             raise ValueError(
-                f"Each section must contain at least two real observed modalities; got {sorted(present)}."
+                "model.single_modality_mode.modality selects a single input branch, but this "
+                f"section contains multiple modalities: {sorted(present)}."
             )
 
         ordered_present = tuple(
@@ -998,6 +1040,14 @@ class StageMultiModalModel(nn.Module):
                     f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
                 )
             combo_key = self._combo_key(modality_order)
+            is_single_modality = len(modality_order) == 1
+            if is_single_modality and not any(
+                message.startswith("Single-modality mode active") for message in messages
+            ):
+                messages.append(
+                    "Single-modality mode active: COSIE cross-view contrastive loss is skipped "
+                    "and the encoded modality is passed through identity fusion."
+                )
 
             section_features: dict[str, torch.Tensor] = {}
             n_spots: int | None = None
@@ -1083,10 +1133,16 @@ class StageMultiModalModel(nn.Module):
                     },
                 )
 
-            section_crossview_loss, section_loss_details = compute_pairwise_cosie_crossview_loss(
-                section_latents,
-                gamma=contrastive_gamma,
-            )
+            if is_single_modality:
+                section_crossview_loss = torch.zeros(
+                    (), device=device, dtype=next(iter(section_latents.values())).dtype
+                )
+                section_loss_details = {}
+            else:
+                section_crossview_loss, section_loss_details = compute_pairwise_cosie_crossview_loss(
+                    section_latents,
+                    gamma=contrastive_gamma,
+                )
             crossview_loss = crossview_loss + section_crossview_loss
             _record_forward_memory(
                 memory_recorder,
@@ -1098,8 +1154,14 @@ class StageMultiModalModel(nn.Module):
                 latent_dict[section] = section_latents
             target_feature_dict[section] = section_features
 
-            fusion_module = self.fusion_modules[combo_key]
-            if use_encoder_fusion_checkpoint:
+            if is_single_modality:
+                # The encoder already emits latent_dim features, so identity
+                # fusion is both well-defined and avoids adding parameters that
+                # exist only to make a one-view input look multimodal.
+                fused = section_latents[modality_order[0]]
+            else:
+                fusion_module = self.fusion_modules[combo_key]
+            if not is_single_modality and use_encoder_fusion_checkpoint:
                 fusion_latents = tuple(section_latents[modality] for modality in modality_order)
 
                 def run_fusion(*latents: torch.Tensor) -> torch.Tensor:
@@ -1116,7 +1178,7 @@ class StageMultiModalModel(nn.Module):
                     use_reentrant=False,
                     preserve_rng_state=True,
                 )
-            else:
+            elif not is_single_modality:
                 fused = fusion_module(section_latents)
             _record_forward_memory(
                 memory_recorder,
@@ -1333,6 +1395,14 @@ class StageMultiModalModel(nn.Module):
 
         if training_loss_only:
             return {
+                "mode": {
+                    "single_modality": bool(expected_modality_order and len(expected_modality_order) == 1),
+                    "modalities": list(expected_modality_order or ()),
+                    "contrastive_skipped": bool(
+                        expected_modality_order and len(expected_modality_order) == 1
+                    ),
+                    "fusion": "identity" if expected_modality_order and len(expected_modality_order) == 1 else "mlp",
+                },
                 "losses": {
                     "total_loss": total_loss.float(),
                     "crossview_loss": crossview_loss.float(),
@@ -1347,6 +1417,14 @@ class StageMultiModalModel(nn.Module):
             }
 
         return {
+            "mode": {
+                "single_modality": bool(expected_modality_order and len(expected_modality_order) == 1),
+                "modalities": list(expected_modality_order or ()),
+                "contrastive_skipped": bool(
+                    expected_modality_order and len(expected_modality_order) == 1
+                ),
+                "fusion": "identity" if expected_modality_order and len(expected_modality_order) == 1 else "mlp",
+            },
             "fused_embeddings": fused_embeddings,
             "context_embeddings": context_embeddings,
             "graphsage_embeddings": graphsage_embeddings,

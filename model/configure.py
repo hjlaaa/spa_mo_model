@@ -89,6 +89,15 @@ def get_default_model_config():
         "model": {
             "latent_dim": 128,
             "modalities_supported": ["HE", "RNA", "Protein", "Metabolite"],
+            # Opt-in compatibility mode for genuinely single-modality data.
+            # ``modality`` may be left as None to accept any one supported
+            # modality, or set to HE/RNA/Protein/Metabolite to fail fast when
+            # a dataset was wired to the wrong input branch.  The default is
+            # deliberately disabled so existing multimodal runs are unchanged.
+            "single_modality_mode": {
+                "enabled": False,
+                "modality": None,
+            },
             "valid_modality_sets": [
                 ["HE", "RNA"],
                 ["HE", "Protein"],

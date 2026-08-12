@@ -1,6 +1,6 @@
-# spa_mo_model、MOFA+、COSIE、SpaMosaic 在 MouseBrain、CRC、MISAR-seq、Human_Lymph_Node、Mouse_Spleen、Mouse_Thymus、Simulation 与 spatch 上的结果对比报告
+# spa_mo_model、MOFA+、COSIE、SpaMosaic 在 MouseBrain、CRC、MISAR-seq、Human_Lymph_Node、Mouse_Spleen、Mouse_Thymus、Simulation、spatch 与 Human_Embryo 上的结果对比报告
 
-生成时间：2026-07-01；MISAR-seq 结果更新于 2026-07-02；Mouse_Spleen、Mouse_Thymus 及 spa_mo_model 公共指标更新于 2026-07-09；Simulation 结果更新于 2026-07-23；spatch 结果更新于 2026-07-25；Human_Lymph_Node 四方法标准对齐结果更新于 2026-07-25。本文按照用户指定目录读取已有实验结果，并补算/汇总了 `spa_mo_model` 与 baseline 的聚类、空间连续性、section diagnostic 和 batch correction 指标；未修改原始数据集。
+生成时间：2026-07-01；MISAR-seq 结果更新于 2026-07-02；Mouse_Spleen、Mouse_Thymus 及 spa_mo_model 公共指标更新于 2026-07-09；Simulation 结果更新于 2026-07-23；spatch 结果更新于 2026-07-25；Human_Lymph_Node 四方法标准对齐结果更新于 2026-07-25；Human_Embryo 四方法结果更新于 2026-08-11。本文按照用户指定目录读取已有实验结果，并补算/汇总了 `spa_mo_model` 与 baseline 的聚类、空间连续性、section diagnostic 和 batch correction 指标；未修改原始数据集。
 
 ## 结果目录
 | 数据集                 | 方法           | 目录                                                                                                                                 |
@@ -37,6 +37,10 @@
 | spatch              | MOFA+        | 未生成分析结果；失败记录：/home/hujinlan/mofa+/runs/spatch/run_failure.json                                                     |
 | spatch              | COSIE        | /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis                                                     |
 | spatch              | SpaMosaic    | 未生成分析结果；失败记录：/home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json                              |
+| Human_Embryo        | spa_mo_model | /home/hujinlan/spa_mo_model/result_v4C/human_embryo_rna_only/fullspot_200ep_bidirectional_sparse_uot_fused_poolfused_seed42      |
+| Human_Embryo        | MOFA+        | /home/hujinlan/mofa+/analysis/human_embryo_mofa_rna_only_fullspot_pc50_k10_iter1000                                              |
+| Human_Embryo        | COSIE        | /home/hujinlan/cosie_runs/human_embryo_cosie_rna_only_fullspot_600ep                                                            |
+| Human_Embryo        | SpaMosaic    | /home/hujinlan/SpaMosaic-dev/analysis/human_embryo_spamosaic_rna_only_fullspot_100ep                                             |
 
 ## 指标解释与可比性说明
 
@@ -53,7 +57,7 @@
 
 四个方法的训练目标和配置不同：潜变量维度、HVG 数量、训练轮数、Harmony/metacell/OT/CE loss 等设置均不完全一致。因此这些表格适合做 baseline 级别横向参考，不应解释为严格受控的消融实验。
 
-Human_Lymph_Node、Mouse_Spleen 与 Mouse_Thymus 的原始 `obs` 不包含可靠细胞类型或组织区域真值，因此只报告无监督内部指标、空间连续性、section diagnostic 和 batch correction；不把 section ARI/NMI 误写成生物学聚类准确率。Simulation 则有五类 `spatial_domain` 真值（background、sp1–sp4），因此额外报告外部聚类指标、模拟因子恢复和同网格跨切片检索。spatch 只对成功完成训练与分析的 spa_mo_model 和 COSIE 做数值对比；MOFA+ 与 SpaMosaic 仅记录资源不足导致的失败，不把缺失值纳入排名。
+Human_Lymph_Node、Mouse_Spleen 与 Mouse_Thymus 的原始 `obs` 不包含可靠细胞类型或组织区域真值，因此只报告无监督内部指标、空间连续性、section diagnostic 和 batch correction；不把 section ARI/NMI 误写成生物学聚类准确率。Simulation 则有五类 `spatial_domain` 真值（background、sp1–sp4），因此额外报告外部聚类指标、模拟因子恢复和同网格跨切片检索。spatch 只对成功完成训练与分析的 spa_mo_model 和 COSIE 做数值对比；MOFA+ 与 SpaMosaic 仅记录资源不足导致的失败，不把缺失值纳入排名。Human_Embryo 有 42 类 `celltype` 注释，可用于训练后外部聚类评价；但七个 section 对应连续发育时期，因此 section mixing 只作诊断，不能把发育阶段差异简单视为应被消除的技术批次。
 
 ## MouseBrain
 
@@ -1444,6 +1448,193 @@ COSIE 在全部共同 k、joint 和 independent 两种模式下的空间连续�
 
 spatch 上只对成功的 spa_mo_model 和 COSIE 下结论。spa_mo_model 在 `cell_type_common` 的 best ARI/NMI、更高 k 的共同 ASW，以及 bLISI/kBET 上占优；COSIE 在 `spatial_cluster`、`codex_coarse_label` 的外部聚类指标和所有共同 k 的空间连续性上占优。两者的 section diagnostic 均较低，bASW/PCR 也都显示全局 section 可分性不强。MOFA+ 在第一次 GPU W 更新时因 CuPy OOM 失败，SpaMosaic 在 epoch 0 因 CUDA OOM 失败，二者没有结果可供公平对比。
 
+## Human_Embryo
+
+### 运行状态与结果目录
+
+| 方法         | 状态 | 结果目录                                                                                                                        |
+| ------------ | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
+| spa_mo_model | 成功 | /home/hujinlan/spa_mo_model/result_v4C/human_embryo_rna_only/fullspot_200ep_bidirectional_sparse_uot_fused_poolfused_seed42     |
+| MOFA+        | 成功 | /home/hujinlan/mofa+/analysis/human_embryo_mofa_rna_only_fullspot_pc50_k10_iter1000                                             |
+| COSIE        | 成功 | /home/hujinlan/cosie_runs/human_embryo_cosie_rna_only_fullspot_600ep                                                           |
+| SpaMosaic    | 成功 | /home/hujinlan/SpaMosaic-dev/analysis/human_embryo_spamosaic_rna_only_fullspot_100ep                                            |
+
+四种方法均成功完成 GPU 训练、全量 spot embedding/factor 导出和统一下游分析。原始七张 HESTA RNA 切片共有 1,030,013 个 spot；统一 QC 后保留 1,029,902 个，过滤 111 个。各切片保留 spot 数依次为 12,138、18,374、44,531、77,311、147,864、175,454 和 554,230。四种方法都复用同一份 spa_mo_model 预处理缓存：36,381 个共同基因中按 section-balanced Seurat v3 选择 3,000 HVG，使用 `layers['counts']`，经 library-size normalize、log1p、balanced-fit TruncatedSVD 和 component z-score 得到 50 维 RNA 输入；QC 阈值统一为 min counts 10、min genes 5、max mitochondrial percentage 30%，均未使用 Harmony。
+
+### 配置与数据适配摘要
+
+| 方法         | 主要设置                                                                                                                                                                                                                                                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| spa_mo_model | 显式 RNA-only 开关；完整 1,029,902 spot 直接训练和输出；128 维 embedding；200 epoch；Adam，lr=1e-3，weight decay=0；seed42；BF16；空间 5-NN；GraphSAGE；单模态时跳过 cross-view contrastive、fusion=identity，但保留 RNA reconstruction 与跨相邻 section 的 bidirectional sparse UOT-attention；候选、检索和语义源均为 fused/pool(fused)，局部上下文为 fused spatial context。 |
+| MOFA+        | 单视图 `RNA_PC`；完整 1,029,902 spot 直接训练和输出；10 factors；最多 1,000 iteration，fast convergence 在 iteration 151 收敛；Gaussian likelihood；float32；scale views、center groups；ARD factors/weights、spike-and-slab weights；seed1；CuPy GPU，未回退 CPU。                                                                                                    |
+| COSIE        | RNA-only；原始 1,029,902 spot 全部输入和输出；训练阶段使用 6×6 metacell，将训练节点压缩为 259,757，随后 full-spot inference；128 维 embedding；600 epoch；Adam，lr=1e-4；seed8；GraphAutoencoder hidden=[256,128]；spatial 5-NN、feature 30-NN；跨模态 contrastive 与 dual prediction 为 0，cross-section triplet 从 epoch 201 开始。                                         |
+| SpaMosaic    | RNA-only；完整 1,029,902 spot 直接训练和输出，不使用 metacell；WLGCN，hidden=128、latent=32；100 epoch；lr=0.01；seed1234；radius cutoff=2000，intra/inter k=10；`w_g=0.8`、`w_rec_g=0`、temperature=0.01；单模态下 contrastive 为空，保留 feature reconstruction，并使用空间图与 RNA MNN 做输入平滑。                                                                |
+
+### Human_Embryo 关键参数逐项对齐
+
+| 参数                       | spa_mo_model                                      | MOFA+                                     | COSIE                                  | SpaMosaic                                  |
+| -------------------------- | ------------------------------------------------- | ----------------------------------------- | -------------------------------------- | ------------------------------------------ |
+| 输入模态                   | RNA-only                                          | RNA-only                                  | RNA-only                               | RNA-only                                   |
+| 统一输入特征               | 3,000 HVG → 50 RNA PCs                            | 同左                                      | 同左                                   | 同左                                       |
+| QC 后原始 spot             | 1,029,902                                         | 1,029,902                                 | 1,029,902                              | 1,029,902                                  |
+| 实际训练节点               | 1,029,902 full spot                               | 1,029,902 full spot                       | 259,757 metacells                      | 1,029,902 full spot                        |
+| 最终输出覆盖               | 1,029,902 spots                                   | 1,029,902 spots                           | 1,029,902 spots                        | 1,029,902 spots                            |
+| 输出维度                   | 128                                               | 10 factors                                | 128                                    | 32                                         |
+| 训练长度                   | 200 epochs                                        | max 1,000；iteration 151 收敛             | 600 epochs                             | 100 epochs                                 |
+| 学习率                     | 1e-3                                              | 变分更新，无 Adam lr                      | 1e-4                                   | 0.01                                       |
+| 随机种子                   | 42                                                | 1                                         | 8                                      | 1234                                       |
+| GPU                        | RTX 4090；BF16                                    | RTX 4090；CuPy float32                     | RTX 4090                               | RTX 4090                                   |
+| 训练耗时                   | 2,169.6 s                                         | 335.6 s                                   | 502.0 s                                | 314.0 s                                    |
+| 峰值/记录显存              | run summary 未记录峰值                            | 训练后 CuPy pool total 1.23 GiB，非峰值   | reserved peak 10.52 GiB                | reserved peak 4.94 GiB                     |
+| Harmony                    | 否                                                | 否                                        | 否                                     | 否                                         |
+| metacell                   | 否                                                | 否                                        | 是，6×6                                | 否                                         |
+| 图/空间邻居                | spatial 5-NN + GraphSAGE                          | 不使用空间图                              | spatial 5-NN、feature 30-NN            | WLGCN；intra/inter k=10                    |
+| 单模态对比损失             | 跳过，cross-view=0                                | 不适用                                    | cross-modal contrastive=0              | 空集合，记录数=0                           |
+| 单模态有效目标             | RNA reconstruction                               | 单视图 Gaussian factor likelihood         | graph reconstruction + section triplet | feature reconstruction                    |
+| 跨 section 机制            | bidirectional sparse UOT-attention                | shared factors/groups                     | triplet，epoch 201 起                   | RNA MNN + spatial smoothing                |
+
+spa_mo_model 的 UOT 每 20 epoch 更新一次，在 epoch 20–200 共更新 10 次；只连接相邻发育 section，形成 6 个无向相邻对、12 个方向。候选使用 FAISS IVF，candidate k=200、attention top-k=10；UOT epsilon=0.05、tau_a=tau_b=1、max_iter=100。动态代价为 `0.8 × fused semantic cosine cost + 0.2 × fused spatial-context cosine cost`，因此此前加入的微环境语义信息、fused/pool(fused) 和 OT-attention 均保留。单模态开关只令 cross-view contrastive 为 0、fusion 退化为 identity，没有关闭 OT、空间图、GraphSAGE 或 reconstruction。
+
+COSIE 的 6×6 metacell 使训练节点约缩小 3.87–4.00 倍；这一设置会影响局部平滑程度和内部几何，不能把其结果解释为与另外三个 full-spot 训练严格受控的消融。MOFA+ 的 10 维表示、SpaMosaic 的 32 维表示与两个 128 维表示也会影响距离类指标。
+
+统一分析对四种方法均使用完整最终输出拟合 StandardScaler，然后用 MiniBatchKMeans 扫描 k=5/8/10/12/14/16；seed42、n_init=3、max_iter=100、batch size=8192。Cluster/Label ASW、CH 和 DBI 使用每个 scope 固定 5,000 spot 样本；空间连续性使用每张切片的 exact 6-NN 和全部 spot；section diagnostic 使用相同的 100,001 spot，其中 bASW 使用相同的 10,000 spot。`celltype` 有 42 类，只在训练结束后的分析阶段使用。
+
+### Human_Embryo 外部聚类指标：按 celltype ARI 选择 best k
+
+| 方法         | best k |    ARI |    NMI | Homogeneity | Completeness | V-measure | Cluster ASW raw | Cluster ASW scaled | Label ASW raw | Label ASW scaled |
+| ------------ | -----: | -----: | -----: | ----------: | -----------: | --------: | --------------: | -----------------: | ------------: | ---------------: |
+| spa_mo_model |     12 | 0.1967 | 0.3393 |      0.3162 |       0.3661 |    0.3393 |          0.0451 |             0.5226 |       -0.0669 |           0.4666 |
+| MOFA+        |     16 | 0.1225 | 0.2908 |      0.2771 |       0.3059 |    0.2908 |          0.0511 |             0.5255 |       -0.3170 |           0.3415 |
+| COSIE        |     14 | 0.1154 | 0.3299 |      0.2983 |       0.3689 |    0.3299 |          0.1714 |             0.5857 |       -0.2327 |           0.3836 |
+| SpaMosaic    |     16 | 0.2062 | 0.3554 |      0.3509 |       0.3601 |    0.3554 |          0.0667 |             0.5334 |       -0.0431 |           0.4784 |
+
+SpaMosaic 的 best celltype ARI、NMI、V-measure 和 Label ASW 均最高；spa_mo_model 的 best ARI 第二。COSIE 的 Cluster ASW 较高，但 celltype Label ASW 较低，说明其紧致簇并不等价于更接近 42 类 celltype 注释。
+
+### Human_Embryo 共同 k 的 celltype ARI
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | ---------: |
+|  5 |       0.1305 | 0.0399 | 0.0831 |     0.1144 |
+|  8 |       0.1779 | 0.0771 | 0.0784 |     0.1530 |
+| 10 |       0.1644 | 0.0952 | 0.1082 |     0.1856 |
+| 12 |       0.1967 | 0.1027 | 0.0791 |     0.1927 |
+| 14 |       0.1852 | 0.1090 | 0.1154 |     0.1858 |
+| 16 |       0.1852 | 0.1225 | 0.1019 |     0.2062 |
+
+### Human_Embryo 共同 k 的 celltype NMI
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | ---------: |
+|  5 |       0.2976 | 0.1877 | 0.2580 |     0.2774 |
+|  8 |       0.3315 | 0.2687 | 0.3125 |     0.3097 |
+| 10 |       0.3189 | 0.3006 | 0.3129 |     0.3367 |
+| 12 |       0.3393 | 0.2980 | 0.3049 |     0.3342 |
+| 14 |       0.3319 | 0.2882 | 0.3299 |     0.3300 |
+| 16 |       0.3403 | 0.2908 | 0.3284 |     0.3554 |
+
+### Human_Embryo 共同 k 的无监督 Cluster ASW
+
+下表报告统一公式 `(ASW raw + 1) / 2` 得到的 ASW scaled。
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | ---------: |
+|  5 |       0.5199 | 0.5810 | 0.5966 |     0.5278 |
+|  8 |       0.5234 | 0.5679 | 0.6531 |     0.5326 |
+| 10 |       0.5186 | 0.5805 | 0.5937 |     0.5347 |
+| 12 |       0.5226 | 0.5777 | 0.5932 |     0.5337 |
+| 14 |       0.5195 | 0.5830 | 0.5857 |     0.5343 |
+| 16 |       0.5164 | 0.5255 | 0.5804 |     0.5334 |
+
+COSIE 在全部共同 k 上的 Cluster ASW scaled 最高，k=8 达到 0.6531；这与其 metacell 训练和空间/feature 图平滑有关。该优势表示预测簇更紧致，并不表示 celltype 外部准确率最高。
+
+### Human_Embryo 各方法报告 k 范围内最佳内部指标
+
+| 指标            | spa_mo_model       | MOFA+               | COSIE                 | SpaMosaic          |
+| --------------- | ------------------ | ------------------- | --------------------- | ------------------ |
+| best ASW scaled | 0.5234（k=8）      | 0.5830（k=14）      | 0.6531（k=8）         | 0.5347（k=10）     |
+| best ASW raw    | 0.0468（k=8）      | 0.1661（k=14）      | 0.3062（k=8）         | 0.0694（k=10）     |
+| best DBI        | 3.7254（k=5）      | 1.7598（k=14）      | 1.3157（k=8）         | 3.1061（k=16）     |
+| best CH         | 207.0026（k=5）    | 377.6419（k=10）    | 1740.4083（k=5）      | 221.4919（k=5）    |
+| max section ARI | 0.0888（k=12）     | 0.0134（k=16）      | -0.0230（k=14）       | 0.1218（k=5）      |
+| max section NMI | 0.2301（k=16）     | 0.2551（k=14）      | 0.0666（k=14）        | 0.1984（k=16）     |
+
+CH、DBI 和 ASW 使用同样的 5,000 spot 位置，但仍受 embedding 维度和 metacell 平滑影响。section ARI/NMI 是发育阶段依赖诊断，不是需要最大化的生物学准确率。
+
+### Human_Embryo 空间连续性
+
+分 section 独立标准化、独立聚类：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | ---------: |
+|  5 |       0.7240 | 0.5885 | 0.9304 |     0.7424 |
+|  8 |       0.6371 | 0.4808 | 0.8901 |     0.6769 |
+| 10 |       0.5800 | 0.4245 | 0.8677 |     0.6425 |
+| 12 |       0.5616 | 0.3933 | 0.8587 |     0.6038 |
+| 14 |       0.5249 | 0.3684 | 0.8534 |     0.5795 |
+| 16 |       0.4960 | 0.3332 | 0.8384 |     0.5588 |
+
+联合标准化、联合聚类：
+
+|  k | spa_mo_model |  MOFA+ |  COSIE | SpaMosaic |
+| --: | -----------: | -----: | -----: | ---------: |
+|  5 |       0.7818 | 0.8883 | 0.9209 |     0.7824 |
+|  8 |       0.7324 | 0.8415 | 0.9433 |     0.6779 |
+| 10 |       0.7106 | 0.8402 | 0.9030 |     0.6615 |
+| 12 |       0.6892 | 0.8384 | 0.8967 |     0.6331 |
+| 14 |       0.6624 | 0.8208 | 0.8726 |     0.6051 |
+| 16 |       0.6688 | 0.7572 | 0.8736 |     0.6618 |
+
+COSIE 在全部共同 k、joint 和 independent 两种模式下空间连续性最高。MOFA+ 在 joint 聚类中也很高，但 independent 聚类明显下降，提示其联合表示中包含较强的跨 section/发育阶段结构。空间连续性高可能表示组织域更平滑，也可能来自 metacell 或图模型的过度平滑，不能单独作为准确率结论。
+
+### Human_Embryo Batch Correction / Section Diagnostic Metrics
+
+| 方法         | batch_key             | n_used | kNN backend       |  bASW | bASW n |  bLISI |   kBET | kBET rejection | PCR_score | PCR_batch_R2 |
+| ------------ | --------------------- | -----: | ----------------- | -----: | -----: | -----: | -----: | --------------: | --------: | -----------: |
+| spa_mo_model | developmental_section | 100001 | hnswlib_l2_approx | 0.9884 |  10000 | 0.1241 | 0.0284 |          0.9716 |    0.9323 |       0.0677 |
+| MOFA+        | developmental_section | 100001 | hnswlib_l2_approx | 0.7112 |  10000 | 0.0367 | 0.0002 |          0.9998 |    1.0000 |       0.0000 |
+| COSIE        | developmental_section | 100001 | hnswlib_l2_approx | 0.7691 |  10000 | 0.0356 | 0.0012 |          0.9988 |    0.9754 |       0.0246 |
+| SpaMosaic    | developmental_section | 100001 | hnswlib_l2_approx | 0.9651 |  10000 | 0.0877 | 0.0094 |          0.9906 |    0.9173 |       0.0827 |
+
+spa_mo_model 的 bASW、bLISI 和 kBET 最高，MOFA+ 的 PCR_score 最高。但这里的 batch key 是发育时期，局部邻域不充分混合可能反映真实胚胎发育轨迹，而不是需要消除的技术 batch effect，因此本表不用于给方法做单一排名。
+
+### MOFA+ Human_Embryo RNA_PC 视图解释度 R2
+
+| section        | Total R2 (%) |
+| -------------- | -----------: |
+| CS12-13_E2S1   |       2.2313 |
+| CS14-15_E1S1   |       1.0098 |
+| CS17_E1S1      |       2.9523 |
+| CS18_E1S1      |       7.5215 |
+| CS19_E1S1      |       8.6941 |
+| CS20_E1S1      |      12.3319 |
+| CS23_E1S1      |      22.0104 |
+
+MOFA+ 此处的权重对应 50 个 RNA PC，而不是直接的基因权重；若要解释到基因层面，需要结合 spa_mo_model 预处理缓存中的 SVD components 回溯。
+
+### Human_Embryo 单模态目标与训练结果核对
+
+| 方法         | 单模态时被跳过的项                         | 实际保留的学习信号                              | 训练结果核对                                                    |
+| ------------ | ------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------------- |
+| spa_mo_model | cross-view contrastive；多模态 fusion      | RNA reconstruction、空间图、GraphSAGE、UOT-attention | loss 7.1284→1.2476；最终 cross-view=0；12 个方向 OT 均已导出    |
+| MOFA+        | 不适用；原生支持单视图                     | Gaussian factor likelihood、ARD/spike-and-slab  | iteration 151 收敛；10 factors；模型文件已保存                  |
+| COSIE        | cross-modal contrastive、dual prediction   | 图自编码与跨 section triplet                    | 两项被跳过损失最大值均为 0；triplet 从 epoch 201 开始            |
+| SpaMosaic    | bridge contrastive/CE；graph reconstruction | feature reconstruction、空间图与 RNA MNN 平滑   | reconstruction 0.7803→0.2471；597,987 RNA MNN；contrastive=0    |
+
+### Human_Embryo 统一后仍存在的差异
+
+| 差异                                                | 影响大小 | 影响说明                                                                                                                   |
+| --------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| embedding 维度为 128 / 10 / 128 / 32               | 中到大   | 即使逐维标准化，维度仍会改变欧氏距离、KMeans、ASW、CH、DBI 和 kNN 指标；这是模型输出差异。                                  |
+| COSIE 使用 259,757 metacells，其余使用 full spot   | 大       | metacell 会明显平滑局部表达和空间结构，可提高内部 ASW 与空间连续性；最终全 spot 输出不等于训练阶段 full-spot。             |
+| 训练长度分别为 200 ep / 151 iter / 600 ep / 100 ep | 大       | 优化目标与一次迭代含义不同，轮数不能直接换算；属于方法配置差异。                                                           |
+| 仅 spa_mo_model 使用 bidirectional sparse UOT      | 大       | UOT 融合相邻发育时期的 fused 语义和微环境上下文；单模态开关没有删除该结构。                                                |
+| 图模型与空间机制不同                                | 大       | spa_mo_model、COSIE、SpaMosaic 显式使用空间图，MOFA+ 不使用；COSIE 另有 metacell，SpaMosaic 使用 RNA MNN 输入平滑。        |
+| section 是发育时期而非普通技术批次                  | 解释层面 | bASW/bLISI/kBET/PCR 仅供诊断；更强 mixing 不必然更符合胚胎发育生物学。                                                      |
+
+### Human_Embryo 小结
+
+Human_Embryo 上四种方法都完成了百万级 spot 的最终输出。SpaMosaic 的 celltype best ARI/NMI 和 Label ASW 最高，spa_mo_model 的 celltype ARI 第二且 section mixing 诊断最强；COSIE 的内部 ASW、CH/DBI 与空间连续性明显最高，但这一结果与 6×6 metacell 和图平滑密切相关，其 celltype ARI 并不占优；MOFA+ 的 PCR_score 最好并提供因子解释度，但 celltype Label ASW 最低。由于四者输出维度、训练节点、优化目标与训练长度不同，本节适合作为 baseline 结果比较，不应解释成严格同配置消融。
+
 ## 综合结论
 
 1. MouseBrain：spa_mo_model 在本次补算的 ARI/NMI/Label ASW 上整体最好，并且保持较高空间连续性；COSIE 次之，SpaMosaic 的 Cluster ASW 很高，MOFA+ 相对较低。
@@ -1454,8 +1645,9 @@ spatch 上只对成功的 spa_mo_model 和 COSIE 下结论。spa_mo_model 在 `c
 6. Mouse_Thymus：spa_mo_model 的共同 k ASW 较高，SpaMosaic 的 CH 较高，COSIE 的空间连续性最高；但三者都保留明显 section 结构。MOFA+ 的 DBI 和 batch correction 最好，跨切片整合最充分。
 7. Simulation：COSIE 的空间域 ARI/NMI、空间连续性和跨切片同位置检索显著最好，SpaMosaic 的外部聚类指标第二；spa_mo_model 的空间因子恢复和 batch mixing 很强但 nuisance 泄漏明显；MOFA+ 的 RNA nuisance 泄漏最低。COSIE 的高分已复核无计算或标签泄漏错误，但高度受共享空间模板、空间图和 k=5 设置影响。
 8. spatch：只比较成功运行的 spa_mo_model 与 COSIE。spa_mo_model 在 `cell_type_common`、较高 k 的 ASW 和局部 batch mixing 上更好；COSIE 在 `spatial_cluster`、`codex_coarse_label` 和空间连续性上更好。MOFA+ 与 SpaMosaic 均因 24 GB RTX 4090 显存不足而没有可比较结果。
-9. 由于配置差异很大，尤其 COSIE 使用 Harmony/不同图训练设置，spa_mo_model 使用 fullspot OT/attention，SpaMosaic 使用原方法模态预处理与 CE loss，MOFA+ 是因子模型，这些结果更适合作为 baseline 观察，不适合直接作为最终胜负判断。
-10. 如果要进一步做严格比较，建议统一 k 列表、KMeans random seed/n_init、embedding 标准化、ASW sample size，并在每个数据集上明确 batch key 与主要生物标签的优先级。
+9. Human_Embryo：SpaMosaic 的 celltype best ARI/NMI 与 Label ASW 最高，spa_mo_model 的 celltype ARI 第二且 section mixing 诊断最强；COSIE 的内部 ASW、CH/DBI 和空间连续性最高，但其 6×6 metacell 训练会增强局部平滑，celltype ARI 不占优；MOFA+ 的 PCR_score 最好并提供因子解释度。发育 section 不是普通技术批次，mixing 指标不用于单一排名。
+10. 由于配置差异很大，尤其 COSIE 使用 Harmony/不同图训练设置或 metacell，spa_mo_model 使用 fullspot OT/attention，SpaMosaic 使用原方法模态预处理与图/MNN机制，MOFA+ 是因子模型，这些结果更适合作为 baseline 观察，不适合直接作为最终胜负判断。
+11. 如果要进一步做严格比较，建议统一 k 列表、KMeans random seed/n_init、embedding 标准化、ASW sample size，并在每个数据集上明确 batch key 与主要生物标签的优先级；Human_Embryo 还应额外统一 full-spot 与 metacell 训练策略、输出维度和随机种子重复实验。
 
 ## 派生文件
 
@@ -1480,6 +1672,10 @@ spatch 上只对成功的 spa_mo_model 和 COSIE 下结论。spa_mo_model 在 `c
 - COSIE spatch 指标与摘要：`/home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/metrics`；`/home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/SUMMARY.md`
 - MOFA+ spatch GPU OOM 记录：`/home/hujinlan/mofa+/runs/spatch/run_failure.json`
 - SpaMosaic spatch GPU OOM 记录：`/home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json`
+- spa_mo_model Human_Embryo 指标与摘要：`/home/hujinlan/spa_mo_model/result_v4C/human_embryo_rna_only/fullspot_200ep_bidirectional_sparse_uot_fused_poolfused_seed42/analysis/standardized_embedding/metrics`；`/home/hujinlan/spa_mo_model/result_v4C/human_embryo_rna_only/fullspot_200ep_bidirectional_sparse_uot_fused_poolfused_seed42/analysis/standardized_embedding/SUMMARY.md`
+- MOFA+ Human_Embryo 指标与摘要：`/home/hujinlan/mofa+/analysis/human_embryo_mofa_rna_only_fullspot_pc50_k10_iter1000/standardized_embedding/metrics`；`/home/hujinlan/mofa+/analysis/human_embryo_mofa_rna_only_fullspot_pc50_k10_iter1000/standardized_embedding/SUMMARY.md`
+- COSIE Human_Embryo 指标与摘要：`/home/hujinlan/cosie_runs/human_embryo_cosie_rna_only_fullspot_600ep/analysis/standardized_embedding/metrics`；`/home/hujinlan/cosie_runs/human_embryo_cosie_rna_only_fullspot_600ep/analysis/standardized_embedding/SUMMARY.md`
+- SpaMosaic Human_Embryo 指标与摘要：`/home/hujinlan/SpaMosaic-dev/analysis/human_embryo_spamosaic_rna_only_fullspot_100ep/standardized_embedding/metrics`；`/home/hujinlan/SpaMosaic-dev/analysis/human_embryo_spamosaic_rna_only_fullspot_100ep/standardized_embedding/SUMMARY.md`
 
 ## 指标来源补充
 
@@ -1517,6 +1713,10 @@ spatch 上只对成功的 spa_mo_model 和 COSIE 下结论。spa_mo_model 在 `c
 | spatch | MOFA+ | 无指标；失败记录：/home/hujinlan/mofa+/runs/spatch/run_failure.json |
 | spatch | COSIE | /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/metrics; /home/hujinlan/cosie_runs/spatch_cosie_rna_protein_he_metacell_6x6/analysis/clustering |
 | spatch | SpaMosaic | 无指标；失败记录：/home/hujinlan/SpaMosaic-dev/runs/spatch_spamosaic_full/run_failure.json |
+| Human_Embryo | spa_mo_model | /home/hujinlan/spa_mo_model/result_v4C/human_embryo_rna_only/fullspot_200ep_bidirectional_sparse_uot_fused_poolfused_seed42/analysis/standardized_embedding/metrics |
+| Human_Embryo | MOFA+ | /home/hujinlan/mofa+/analysis/human_embryo_mofa_rna_only_fullspot_pc50_k10_iter1000/standardized_embedding/metrics |
+| Human_Embryo | COSIE | /home/hujinlan/cosie_runs/human_embryo_cosie_rna_only_fullspot_600ep/analysis/standardized_embedding/metrics |
+| Human_Embryo | SpaMosaic | /home/hujinlan/SpaMosaic-dev/analysis/human_embryo_spamosaic_rna_only_fullspot_100ep/standardized_embedding/metrics |
 
 ## Batch Correction Metrics
 
@@ -1607,5 +1807,18 @@ Simulation 中 spa_mo_model 的 bASW/kBET 最好，COSIE 的 bLISI 最好；四�
 | COSIE        | group     | 100000 | sklearn_exact | 0.9933 |  10000 | 0.2380 | 0.0588 |          0.9412 |    0.9944 |       0.0056 |
 
 spatch 中 spa_mo_model 的 bLISI/kBET 更高，COSIE 的 bASW/PCR_score 略高；两者使用相同位置的100,000个spot，bASW也使用相同位置的10,000个spot。
+
+### Human_Embryo Batch Metrics
+
+Human_Embryo 的四种方法均使用相同位置的 100,001 个 spot 和 HNSW L2 approximate backend，bASW 使用其中相同位置的 10,000 个 spot。`developmental_section` 表示连续胚胎发育时期而非普通技术批次，因此本表只作 section dependence 诊断。
+
+| 方法         | batch_key             | n_used | kNN backend       |  bASW | bASW n |  bLISI |   kBET | kBET rejection | PCR_score | PCR_batch_R2 |
+| ------------ | --------------------- | -----: | ----------------- | -----: | -----: | -----: | -----: | --------------: | --------: | -----------: |
+| spa_mo_model | developmental_section | 100001 | hnswlib_l2_approx | 0.9884 |  10000 | 0.1241 | 0.0284 |          0.9716 |    0.9323 |       0.0677 |
+| MOFA+        | developmental_section | 100001 | hnswlib_l2_approx | 0.7112 |  10000 | 0.0367 | 0.0002 |          0.9998 |    1.0000 |       0.0000 |
+| COSIE        | developmental_section | 100001 | hnswlib_l2_approx | 0.7691 |  10000 | 0.0356 | 0.0012 |          0.9988 |    0.9754 |       0.0246 |
+| SpaMosaic    | developmental_section | 100001 | hnswlib_l2_approx | 0.9651 |  10000 | 0.0877 | 0.0094 |          0.9906 |    0.9173 |       0.0827 |
+
+spa_mo_model 的 bASW、bLISI 和 kBET 最高，MOFA+ 的 PCR_score 最高；由于 section 含真实发育生物学差异，这些数值不用于判定某方法总体最好。
 
 MouseBrain/CRC 原汇总 CSV：`/home/hujinlan/spa_mo_model/report_derived_metrics/batch_correction_metrics_mofa_cosie_spamosaic_mousebrain_crc.csv`
