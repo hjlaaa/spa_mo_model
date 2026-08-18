@@ -144,7 +144,7 @@ def analyze_crc() -> dict[str, object]:
         / "shared_metrics"
     )
     shared_new = output_root / "shared_metrics"
-    shared_new.mkdir(parents=True)
+    shared_new.mkdir(parents=True, exist_ok=True)
     for name in (
         "asw_sample.csv",
         "plot_sample.csv",
@@ -236,7 +236,7 @@ def analyze_spatch() -> dict[str, object]:
         / "shared_metrics"
     )
     shared_new = output_root / "shared_metrics"
-    shared_new.mkdir(parents=True)
+    shared_new.mkdir(parents=True, exist_ok=True)
     for name in (
         "asw_sample_identities.csv",
         "spatial_graph_manifest.csv",

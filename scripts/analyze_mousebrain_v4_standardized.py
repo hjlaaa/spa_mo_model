@@ -114,11 +114,16 @@ def main() -> None:
         default=PROJECT_ROOT / "result_v4",
         help="Top-level result root containing the MouseBrain run.",
     )
+    parser.add_argument(
+        "--run-name",
+        default="bidirectional_sparse_uot_fixed_lc0.1_seed42",
+        help="MouseBrain run directory name below <result-root>/mousebrain.",
+    )
     args = parser.parse_args()
     RESULT_ROOT = (
         args.result_root.resolve()
         / "mousebrain"
-        / "bidirectional_sparse_uot_fixed_lc0.1_seed42"
+        / args.run_name
     )
     RUN_ROOT = RESULT_ROOT / "epochs_200"
     data = load_data()

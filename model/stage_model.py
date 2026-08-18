@@ -116,7 +116,11 @@ def _checkpoint_graph_encoder_forward(
     )
 
 
-def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
+def should_update_ot(
+    epoch: int,
+    update_interval: int = 20,
+    first_update_epoch: int = 100,
+) -> bool:
     """Return True when the cached UOT prior should be refreshed.
 
     Recommended training pattern:
@@ -131,7 +135,7 @@ def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
 
     ``    optimizer.zero_grad(); loss.backward(); optimizer.step()``
 
-    ``    if should_update_ot(epoch, 20):``
+    ``    if should_update_ot(epoch, 20, first_update_epoch=100):``
 
     ``        with torch.no_grad():``
 
@@ -146,7 +150,11 @@ def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
     ``                embedding_source="final")``
     """
 
-    return epoch > 0 and epoch % update_interval == 0
+    if update_interval <= 0:
+        raise ValueError("update_interval must be positive.")
+    if first_update_epoch <= 0:
+        raise ValueError("first_update_epoch must be positive.")
+    return epoch >= first_update_epoch and (epoch - first_update_epoch) % update_interval == 0
 
 
 def compute_self_excluded_spatial_context(

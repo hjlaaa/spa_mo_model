@@ -327,10 +327,13 @@ def plot_spatial_panels(
     seed: int,
     k: int,
 ) -> None:
-    if k < 2 or k > 20:
-        raise ValueError(f"The discrete tab20 cluster plot requires 2 <= k <= 20; got {k}.")
-    colors = list(plt.get_cmap("tab20").colors[:k])
-    cmap = ListedColormap(colors, name=f"tab20_{k}_discrete")
+    if k < 2 or k > 40:
+        raise ValueError(f"The discrete cluster plot requires 2 <= k <= 40; got {k}.")
+    colors = list(plt.get_cmap("tab20").colors)
+    if k > len(colors):
+        colors.extend(list(plt.get_cmap("tab20b").colors[: k - len(colors)]))
+    colors = colors[:k]
+    cmap = ListedColormap(colors, name=f"tab20_family_{k}_discrete")
     boundaries = np.arange(-0.5, k + 0.5, 1.0)
     norm = BoundaryNorm(boundaries, cmap.N)
     fig, axes = plt.subplots(3, 3, figsize=(15, 15), squeeze=False)
