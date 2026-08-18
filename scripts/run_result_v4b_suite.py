@@ -53,6 +53,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 "--faiss_train_sample_size", "10000",
                 "--faiss_query_batch_size", "2048",
                 "--dynamic_candidate_source", "final",
+                "--enable_context_attention_gate",
                 "--uot_epsilon", "0.05", "--uot_tau_a", "1.0",
                 "--uot_tau_b", "1.0", "--uot_max_iter", "100",
                 "--update_interval", "20", "--spatial_knn_k", "5",
@@ -65,6 +66,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 python, str(ROOT / "scripts/run_human_lymph_node.py"),
                 "--output_dir", str(hln_output),
                 "--dynamic_candidate_source", "final",
+                "--enable_context_attention_gate",
             ],
         ),
         (
@@ -80,6 +82,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 "--faiss_query_batch_size", "2048",
                 "--initial_modality_candidate_k", "100", "--candidate_k", "200",
                 "--attention_topk", "10", "--dynamic_candidate_source", "final",
+                "--enable_context_attention_gate",
                 "--spatial_knn_k", "5", "--graphsage_edge_batch_size", "50000",
                 "--training_loss_only", "--decoder_chunk_size", "50000",
                 "--ot_attention_source_chunk_size", "50000",
@@ -96,6 +99,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 python, str(ROOT / "scripts/run_mouse_spleen.py"),
                 "--output_dir", str(spleen_output),
                 "--dynamic_candidate_source", "final",
+                "--enable_context_attention_gate",
             ],
         ),
         (
@@ -104,6 +108,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 python, str(ROOT / "scripts/run_mouse_thymus.py"),
                 "--output_dir", str(thymus_output),
                 "--dynamic_candidate_source", "final",
+                "--enable_context_attention_gate",
             ],
         ),
         (
@@ -112,6 +117,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 python, str(ROOT / "scripts/run_simulation.py"),
                 "--output_dir", str(simulation_output),
                 "--dynamic_candidate_source", "final",
+                "--enable_context_attention_gate",
             ],
         ),
         (

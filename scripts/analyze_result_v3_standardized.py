@@ -240,13 +240,15 @@ def _annotate(output: Path, dataset: str, removed: list[str]) -> dict:
         if run_summary_path.is_file()
         else {}
     )
-    dynamic_source = run_summary.get("dynamic_candidate_source", "fused")
+    dynamic_source = run_summary.get("dynamic_candidate_source", "final")
     context_gate_enabled = bool(
-        run_summary.get("attention_context_gate_enabled", True)
+        run_summary.get("attention_context_gate_enabled", False)
     )
     semantic_source = dynamic_source
     context_source = f"{dynamic_source}_spatial_context"
-    if dynamic_source == "final" and context_gate_enabled:
+    if dynamic_source == "final" and not context_gate_enabled:
+        model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
+    elif dynamic_source == "final" and context_gate_enabled:
         model_variant = "microenvironment_attention_gate_with_v3_dynamic_ot"
     elif dynamic_source == "fused" and not context_gate_enabled:
         model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"

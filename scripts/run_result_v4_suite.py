@@ -65,6 +65,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 "--faiss_train_sample_size", "10000",
                 "--faiss_query_batch_size", "2048",
                 "--dynamic_candidate_source", "fused",
+                "--enable_context_attention_gate",
                 "--uot_epsilon", "0.05",
                 "--uot_tau_a", "1.0",
                 "--uot_tau_b", "1.0",
@@ -74,7 +75,14 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 "--save_ot_prior_topk",
             ],
         ),
-        ("train_human_lymph_node", [python, str(ROOT / "scripts/run_human_lymph_node.py")]),
+        (
+            "train_human_lymph_node",
+            [
+                python,
+                str(ROOT / "scripts/run_human_lymph_node.py"),
+                "--enable_context_attention_gate",
+            ],
+        ),
         (
             "train_misar_seq",
             [
@@ -99,6 +107,7 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 "--candidate_k", "200",
                 "--attention_topk", "10",
                 "--dynamic_candidate_source", "fused",
+                "--enable_context_attention_gate",
                 "--spatial_knn_k", "5",
                 "--graphsage_edge_batch_size", "50000",
                 "--training_loss_only",
@@ -117,9 +126,18 @@ def commands(python: str) -> list[tuple[str, list[str]]]:
                 "--log_cuda_memory",
             ],
         ),
-        ("train_mouse_spleen", [python, str(ROOT / "scripts/run_mouse_spleen.py")]),
-        ("train_mouse_thymus", [python, str(ROOT / "scripts/run_mouse_thymus.py")]),
-        ("train_simulation", [python, str(ROOT / "scripts/run_simulation.py")]),
+        (
+            "train_mouse_spleen",
+            [python, str(ROOT / "scripts/run_mouse_spleen.py"), "--enable_context_attention_gate"],
+        ),
+        (
+            "train_mouse_thymus",
+            [python, str(ROOT / "scripts/run_mouse_thymus.py"), "--enable_context_attention_gate"],
+        ),
+        (
+            "train_simulation",
+            [python, str(ROOT / "scripts/run_simulation.py"), "--enable_context_attention_gate"],
+        ),
         (
             "analyze_mousebrain",
             [python, str(ROOT / "scripts/analyze_mousebrain_v4_standardized.py")],

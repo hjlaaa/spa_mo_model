@@ -143,7 +143,7 @@ def should_update_ot(epoch: int, update_interval: int = 20) -> bool:
 
     ``                context_embedding_dict=contexts, topology_context_weight=0.2,``
 
-    ``                embedding_source="fused")``
+    ``                embedding_source="final")``
     """
 
     return epoch > 0 and epoch % update_interval == 0
@@ -340,7 +340,7 @@ class StageMultiModalModel(nn.Module):
             residual=bool(attn_cfg["residual"]),
             norm=attn_cfg["norm"],
             delta=float(attn_cfg["delta"]),
-            context_gate_enabled=bool(attn_cfg.get("context_gate_enabled", True)),
+            context_gate_enabled=bool(attn_cfg.get("context_gate_enabled", False)),
             context_consistency_backprop_to_alpha=bool(
                 attn_cfg.get("context_consistency_backprop_to_alpha", False)
             ),
@@ -662,7 +662,7 @@ class StageMultiModalModel(nn.Module):
 
         uot_cfg = self.config["uot"]
         source = str(
-            refresh_source or uot_cfg.get("dynamic_refresh_source", "fused")
+            refresh_source or uot_cfg.get("dynamic_refresh_source", "final")
         )
         output_key_by_source = {
             "final": "final_embeddings",
@@ -1193,11 +1193,14 @@ class StageMultiModalModel(nn.Module):
                 fused_embeddings[section] = fused
 
             context_gate_enabled = bool(
-                self.config["ot_attention"].get("context_gate_enabled", True)
+                self.config["ot_attention"].get("context_gate_enabled", False)
             )
             need_spatial_context = context_gate_enabled or (
                 keep_full_outputs
                 and not self.training
+                and str(
+                    self.config["uot"].get("dynamic_refresh_source", "final")
+                ) == "fused"
                 and bool(self.config["uot"].get("topology_aware_refresh_enabled", False))
                 and float(self.config["uot"].get("topology_context_weight", 0.0)) > 0.0
             )

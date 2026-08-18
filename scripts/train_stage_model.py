@@ -321,7 +321,7 @@ def train_stage_model(args):
                 )
                 refresh_embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
                     eval_outputs,
-                    refresh_source="fused",
+                    refresh_source="final",
                 )
                 topology_weight = (
                     float(model.config["uot"].get("topology_context_weight", 0.0))
@@ -333,7 +333,7 @@ def train_stage_model(args):
                     section_order=section_order,
                     context_embedding_dict=context_embeddings,
                     topology_context_weight=topology_weight,
-                    embedding_source="fused",
+                    embedding_source="final",
                 )
             print(f"Updated OT prior at epoch {epoch}.")
 

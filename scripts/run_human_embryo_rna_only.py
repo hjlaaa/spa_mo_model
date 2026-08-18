@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,16 @@ def parse_args() -> argparse.Namespace:
         help="Explicit model branch. This HESTA adapter supplies RNA and therefore requires RNA.",
     )
     parser.add_argument("--reuse_preprocessed", action="store_true")
+    parser.add_argument(
+        "--preprocessed_run_dir",
+        default=None,
+        help="Read a preprocess_manifest from another successful run instead of output_dir/preprocessed.",
+    )
+    parser.add_argument(
+        "--require_harmony",
+        action="store_true",
+        help="Reject preprocessing caches that do not explicitly record Harmony correction.",
+    )
     parser.add_argument("--hvg_num", type=int, default=3000)
     parser.add_argument("--hvg_sample_per_section", type=int, default=5000)
     parser.add_argument("--svd_fit_per_section", type=int, default=20000)
@@ -94,7 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--faiss_train_sample_size", type=int, default=100000)
     parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
-    parser.add_argument("--dynamic_candidate_source", choices=["fused", "final"], default="fused")
+    parser.add_argument("--dynamic_candidate_source", choices=["fused", "final"], default="final")
     parser.add_argument("--spatial_knn_k", type=int, default=5)
     parser.add_argument("--graphsage_edge_batch_size", type=int, default=200000)
     parser.add_argument("--decoder_chunk_size", type=int, default=50000)
@@ -106,7 +117,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint_graph_encoder", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cache_spatial_graphs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--amp_dtype", choices=["none", "bf16", "fp16"], default="bf16")
-    parser.add_argument("--disable_context_attention_gate", action="store_true")
+    parser.add_argument(
+        "--disable_context_attention_gate", action="store_true", default=True
+    )
+    parser.add_argument(
+        "--enable_context_attention_gate",
+        action="store_false",
+        dest="disable_context_attention_gate",
+    )
     parser.add_argument("--save_candidate_qc", action="store_true")
     parser.add_argument("--log_cuda_memory", action="store_true")
     parser.add_argument("--log_cuda_memory_detail", action="store_true")
@@ -124,6 +142,11 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--epochs must be positive with --train.")
     if args.device == "cuda" and (args.train or args.dry_run) and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false.")
+    if args.device == "cuda" and (args.train or args.dry_run):
+        probe = torch.ones((64, 64), device="cuda")
+        probe = probe @ probe
+        torch.cuda.synchronize()
+        del probe
     if args.amp_dtype != "none" and args.device != "cuda" and (args.train or args.dry_run):
         raise ValueError("AMP requires --device cuda.")
     positive = (
@@ -136,6 +159,35 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(f"--{name} must be positive.")
     if args.log_cuda_memory_detail:
         args.log_cuda_memory = True
+
+
+def load_external_preprocessed_run(
+    run_dir: Path, maximum_per_section: int | None
+) -> tuple[dict[str, Any], dict, dict, dict[str, Any]]:
+    summary_path = run_dir / "run_summary.json"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"External preprocessing summary is missing: {summary_path}")
+    source_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if source_summary.get("status") != "PASS":
+        raise ValueError("External preprocessing run is not successful.")
+    manifest = source_summary["preprocess_manifest"]
+    feature_dict = {}
+    spatial_dict = {}
+    for section in manifest["section_order"]:
+        features = np.load(manifest["feature_files"][section], mmap_mode="c")
+        spatial = np.load(manifest["spatial_files"][section], mmap_mode="r")
+        if len(features) != len(spatial):
+            raise ValueError(f"{section}: feature/spatial counts differ in external cache.")
+        if maximum_per_section is not None:
+            if maximum_per_section <= 0 or maximum_per_section > len(features):
+                raise ValueError(
+                    f"Invalid --max_spots_per_section={maximum_per_section} for {section}."
+                )
+            features = np.array(features[:maximum_per_section], dtype=np.float32, copy=True)
+            spatial = np.array(spatial[:maximum_per_section], copy=True)
+        feature_dict[section] = {"RNA": features}
+        spatial_dict[section] = spatial
+    return manifest, feature_dict, spatial_dict, source_summary
 
 
 def build_model_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -195,7 +247,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return summary
 
     cache_dir = output_dir / "preprocessed"
-    if not args.reuse_preprocessed:
+    external_source_summary = None
+    if args.preprocessed_run_dir is not None:
+        if not args.reuse_preprocessed:
+            raise ValueError("--preprocessed_run_dir requires --reuse_preprocessed.")
+        preprocess_manifest, feature_dict, spatial_dict, external_source_summary = (
+            load_external_preprocessed_run(
+                Path(args.preprocessed_run_dir).resolve(), args.max_spots_per_section
+            )
+        )
+    elif not args.reuse_preprocessed:
         preprocess_manifest = preprocess_hesta_rna(
             paths,
             cache_dir,
@@ -213,6 +274,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
     else:
         preprocess_manifest, _, _ = load_preprocessed_manifest(cache_dir)
+    if args.require_harmony and not preprocess_manifest.get("harmony_used"):
+        raise ValueError("Mandatory Harmony correction is missing from preprocessing metadata.")
     if requested_action == "preprocess_only":
         summary = {
             "status": "PASS",
@@ -223,7 +286,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         write_json(output_dir / "run_summary.json", summary)
         return summary
 
-    preprocess_manifest, feature_dict, spatial_dict = load_preprocessed_manifest(cache_dir)
+    if args.preprocessed_run_dir is None:
+        preprocess_manifest, feature_dict, spatial_dict = load_preprocessed_manifest(cache_dir)
     section_order = list(preprocess_manifest["section_order"])
     model_config = build_model_config(args)
     model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
@@ -288,6 +352,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "input_data_path": str(data_dir),
         "output_dir": str(output_dir),
         "model_mode": outputs["mode"],
+        "modalities": ["RNA"],
         "single_modality_switch": model_config["model"]["single_modality_mode"],
         "section_order": section_order,
         "feature_shapes": {
@@ -302,15 +367,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "reconstruction_modalities": {
             section: sorted(outputs["reconstructions"][section]) for section in section_order
         },
-        "harmony_used": False,
+        "harmony_used": bool(preprocess_manifest.get("harmony_used")),
+        "full_spot": args.max_spots_per_section is None,
+        "metacell_used": False,
+        "per_spot_output": True,
+        "preprocessing": {
+            "harmony_used": bool(preprocess_manifest.get("harmony_used")),
+            "harmony_batch_key": preprocess_manifest.get("harmony_batch_key"),
+            "harmony_implementation": preprocess_manifest.get("harmony_implementation"),
+            "external_preprocessed_run": str(Path(args.preprocessed_run_dir).resolve())
+            if args.preprocessed_run_dir is not None else None,
+            "max_spots_per_section": args.max_spots_per_section,
+        },
         "rna_source": "layers/counts",
         "ot_prior_mode": "disabled" if args.disable_uot else "candidate_sparse",
         "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
         "ot_updates": ot_updates,
         "elapsed_time_sec": float(time.time() - start),
+        "gpu_name": torch.cuda.get_device_name(0) if args.device == "cuda" else None,
+        "peak_cuda_allocated_gib": torch.cuda.max_memory_allocated() / (1024 ** 3)
+        if args.device == "cuda" else None,
+        "peak_cuda_reserved_gib": torch.cuda.max_memory_reserved() / (1024 ** 3)
+        if args.device == "cuda" else None,
         "preprocess_manifest": preprocess_manifest,
+        "external_preprocessing_summary": str(
+            Path(args.preprocessed_run_dir).resolve() / "run_summary.json"
+        ) if external_source_summary is not None else None,
         "saved_files": {
             "embeddings": embedding_paths,
+            "final_embeddings": embedding_paths,
             "ot_prior_topk": ot_paths,
             "checkpoint": str(output_dir / "model_checkpoint.pt") if args.train else None,
             "loss_history": str(output_dir / "loss_history.json") if history is not None else None,
@@ -327,9 +412,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    summary = run(parse_args())
-    print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
-    print("HUMAN_EMBRYO_RNA_ONLY: PASS")
+    args = parse_args()
+    try:
+        summary = run(args)
+        print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
+        print("HUMAN_EMBRYO_RNA_ONLY: PASS")
+    except Exception as exc:
+        output_dir = Path(args.output_dir).resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        failure = {
+            "status": "FAILED",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+            "device_requested": args.device,
+            "cpu_fallback_used": False,
+        }
+        write_json(output_dir / "failure.json", failure)
+        print(json.dumps(failure, indent=2, ensure_ascii=False), file=sys.stderr, flush=True)
+        raise
 
 
 if __name__ == "__main__":

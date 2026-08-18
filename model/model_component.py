@@ -381,7 +381,7 @@ class OTGuidedAttention(nn.Module):
         residual: bool = True,
         norm: str | None = "LayerNorm",
         delta: float = 1e-8,
-        context_gate_enabled: bool = True,
+        context_gate_enabled: bool = False,
         context_consistency_backprop_to_alpha: bool = False,
     ):
         super().__init__()

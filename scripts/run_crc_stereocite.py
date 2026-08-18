@@ -110,16 +110,23 @@ def parse_args():
     parser.add_argument(
         "--dynamic_candidate_source",
         choices=["fused", "final"],
-        default="fused",
+        default="final",
         help=(
-            "Embedding used for dynamic OT refresh. fused is the microenvironment-aware "
-            "default; final keeps the legacy compatibility path."
+            "Embedding used for dynamic OT refresh. final is the v3 default; "
+            "fused explicitly enables the later experimental path."
         ),
     )
     parser.add_argument(
         "--disable_context_attention_gate",
         action="store_true",
+        default=True,
         help="Use the v3-compatible 512D attention gate without local-context reliability.",
+    )
+    parser.add_argument(
+        "--enable_context_attention_gate",
+        action="store_false",
+        dest="disable_context_attention_gate",
+        help="Explicitly enable the experimental 513D microenvironment-aware gate.",
     )
     parser.add_argument("--uot_epsilon", type=float, default=0.05)
     parser.add_argument("--uot_tau_a", type=float, default=1.0)

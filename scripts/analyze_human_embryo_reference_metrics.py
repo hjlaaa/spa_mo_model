@@ -9,14 +9,17 @@ import math
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap, to_hex
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
+from scipy.cluster.hierarchy import dendrogram
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics import (
     adjusted_rand_score,
@@ -71,6 +74,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iter", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--reuse-cache", action="store_true")
+    parser.add_argument(
+        "--reuse-flat-labels", action="store_true",
+        help="Reuse existing flat MiniBatchKMeans label arrays while refreshing plots and metrics.",
+    )
+    parser.add_argument(
+        "--skip-hierarchy", action="store_true",
+        help="Skip the nested weighted-Ward hierarchy derived from the largest flat-k partition.",
+    )
     return parser.parse_args()
 
 
@@ -314,16 +325,25 @@ def plot_spatial_panels(
     title: str,
     maximum: int,
     seed: int,
+    k: int,
 ) -> None:
+    if k < 2 or k > 20:
+        raise ValueError(f"The discrete tab20 cluster plot requires 2 <= k <= 20; got {k}.")
+    colors = list(plt.get_cmap("tab20").colors[:k])
+    cmap = ListedColormap(colors, name=f"tab20_{k}_discrete")
+    boundaries = np.arange(-0.5, k + 0.5, 1.0)
+    norm = BoundaryNorm(boundaries, cmap.N)
     fig, axes = plt.subplots(3, 3, figsize=(15, 15), squeeze=False)
-    last = None
     for offset, section in enumerate(sections):
         axis = axes.ravel()[offset]
         frame = metadata[section]
         chosen = sample_indices(len(frame), maximum, seed + offset)
-        last = axis.scatter(
+        values = np.asarray(labels[section][chosen], dtype=np.int32)
+        if values.size and (values.min() < 0 or values.max() >= k):
+            raise ValueError(f"{section}: cluster labels fall outside [0, {k - 1}].")
+        axis.scatter(
             frame["x"].to_numpy()[chosen], frame["y"].to_numpy()[chosen],
-            c=labels[section][chosen], s=1, cmap="tab20", linewidths=0, rasterized=True,
+            c=values, s=1, cmap=cmap, norm=norm, linewidths=0, rasterized=True,
         )
         axis.set_title(section)
         axis.set_aspect("equal")
@@ -332,10 +352,465 @@ def plot_spatial_panels(
     for axis in axes.ravel()[len(sections):]:
         axis.axis("off")
     fig.suptitle(title)
-    if last is not None:
-        fig.colorbar(last, ax=axes.ravel().tolist(), shrink=0.55, label="cluster")
+    scalar = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    scalar.set_array([])
+    colorbar = fig.colorbar(
+        scalar, ax=axes.ravel().tolist(), shrink=0.55,
+        ticks=np.arange(k), boundaries=boundaries, spacing="uniform", label="cluster",
+    )
+    colorbar.ax.set_yticklabels([str(value) for value in range(k)])
     fig.savefig(path, dpi=220, bbox_inches="tight")
     plt.close(fig)
+
+
+def categorical_colors(n_categories: int) -> list[tuple[float, float, float, float]]:
+    colors: list[tuple[float, float, float, float]] = []
+    for name in ("tab20", "tab20b", "tab20c"):
+        colors.extend(list(plt.get_cmap(name).colors))
+    if n_categories > len(colors):
+        colors.extend([plt.get_cmap("hsv")(value) for value in np.linspace(0, 1, n_categories - len(colors), endpoint=False)])
+    return colors[:n_categories]
+
+
+def plot_celltype_reference(
+    output_dir: Path,
+    sections: list[str],
+    metadata: dict[str, pd.DataFrame],
+    maximum: int,
+    seed: int,
+) -> dict[str, Any]:
+    reference_dir = output_dir / "celltype_reference"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    categories = sorted(
+        {
+            value
+            for section in sections
+            for value in metadata[section]["celltype"].astype(str).tolist()
+            if value != "nan"
+        }
+    )
+    if not categories:
+        raise ValueError("No valid celltype annotations were found.")
+    colors = categorical_colors(len(categories))
+    category_index = {name: index for index, name in enumerate(categories)}
+    fig, axes = plt.subplots(3, 3, figsize=(20, 15), squeeze=False)
+    count_rows: list[dict[str, Any]] = []
+    for offset, section in enumerate(sections):
+        axis = axes.ravel()[offset]
+        frame = metadata[section]
+        truth = frame["celltype"].astype(str).to_numpy()
+        chosen = sample_indices(len(frame), maximum, seed + offset)
+        valid = truth[chosen] != "nan"
+        chosen_valid = chosen[valid]
+        point_colors = [colors[category_index[value]] for value in truth[chosen_valid]]
+        axis.scatter(
+            frame["x"].to_numpy()[chosen_valid], frame["y"].to_numpy()[chosen_valid],
+            c=point_colors, s=1, linewidths=0, rasterized=True,
+        )
+        axis.set_title(section)
+        axis.set_aspect("equal")
+        axis.invert_yaxis()
+        axis.axis("off")
+        for celltype, count in frame["celltype"].astype(str).value_counts().items():
+            if celltype != "nan":
+                count_rows.append(
+                    {
+                        "section": section,
+                        "celltype": celltype,
+                        "count": int(count),
+                        "fraction": float(count / len(frame)),
+                        "color": to_hex(colors[category_index[celltype]]),
+                    }
+                )
+    for axis in axes.ravel()[len(sections):]:
+        axis.axis("off")
+    handles = [
+        Line2D([0], [0], marker="o", linestyle="", markersize=5, color=colors[index], label=name)
+        for index, name in enumerate(categories)
+    ]
+    fig.suptitle(f"celltype reference annotations ({len(categories)} classes)")
+    fig.legend(
+        handles=handles, loc="center right", bbox_to_anchor=(0.995, 0.5),
+        ncol=2, fontsize=7, title="celltype", markerscale=1.2,
+    )
+    fig.subplots_adjust(right=0.72)
+    figure_path = reference_dir / "spatial_all_sections_by_celltype.png"
+    fig.savefig(figure_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+    counts = pd.DataFrame(count_rows)
+    counts.to_csv(reference_dir / "celltype_counts_by_section.csv", index=False)
+    color_map = pd.DataFrame(
+        {"celltype": categories, "color": [to_hex(color) for color in colors]}
+    )
+    color_map.to_csv(reference_dir / "celltype_color_map.csv", index=False)
+    return {
+        "n_celltypes": len(categories),
+        "figure": str(figure_path),
+        "counts": str(reference_dir / "celltype_counts_by_section.csv"),
+        "color_map": str(reference_dir / "celltype_color_map.csv"),
+    }
+
+
+def cluster_centers_from_labels(
+    space: np.ndarray,
+    labels: np.ndarray,
+    n_leaves: int,
+    chunk_size: int = 50000,
+) -> tuple[np.ndarray, np.ndarray]:
+    counts = np.zeros(n_leaves, dtype=np.int64)
+    sums = np.zeros((n_leaves, int(space.shape[1])), dtype=np.float64)
+    for start in range(0, len(labels), chunk_size):
+        end = min(start + chunk_size, len(labels))
+        chunk_labels = np.asarray(labels[start:end], dtype=np.int32)
+        if chunk_labels.size and (chunk_labels.min() < 0 or chunk_labels.max() >= n_leaves):
+            raise ValueError("Leaf labels fall outside the expected hierarchy range.")
+        chunk = np.asarray(space[start:end], dtype=np.float64)
+        for leaf in np.unique(chunk_labels):
+            selected = chunk_labels == leaf
+            counts[leaf] += int(selected.sum())
+            sums[leaf] += chunk[selected].sum(axis=0)
+    if np.any(counts == 0):
+        raise ValueError(f"Empty leaf clusters cannot form a hierarchy: {np.flatnonzero(counts == 0).tolist()}")
+    centers = sums / counts[:, None]
+    return centers, counts
+
+
+def build_weighted_ward_tree(
+    centers: np.ndarray,
+    counts: np.ndarray,
+) -> tuple[np.ndarray, pd.DataFrame, dict[int, list[list[int]]]]:
+    """Agglomerate flat leaf clusters with a size-weighted Ward SSE cost."""
+
+    n_leaves = int(len(counts))
+    nodes: dict[int, dict[str, Any]] = {
+        leaf: {
+            "center": np.asarray(centers[leaf], dtype=np.float64),
+            "count": int(counts[leaf]),
+            "leaves": [leaf],
+        }
+        for leaf in range(n_leaves)
+    }
+    active = set(range(n_leaves))
+    cuts: dict[int, list[list[int]]] = {
+        n_leaves: [[leaf] for leaf in range(n_leaves)]
+    }
+    linkage_rows: list[list[float]] = []
+    merge_rows: list[dict[str, Any]] = []
+    previous_height = 0.0
+    for step in range(n_leaves - 1):
+        active_sorted = sorted(active)
+        best: Optional[tuple[float, int, int]] = None
+        for left_offset, left in enumerate(active_sorted[:-1]):
+            left_node = nodes[left]
+            for right in active_sorted[left_offset + 1 :]:
+                right_node = nodes[right]
+                squared_distance = float(np.sum((left_node["center"] - right_node["center"]) ** 2))
+                ward_delta = (
+                    left_node["count"] * right_node["count"]
+                    / (left_node["count"] + right_node["count"])
+                    * squared_distance
+                )
+                candidate = (ward_delta, left, right)
+                if best is None or candidate < best:
+                    best = candidate
+        if best is None:
+            raise RuntimeError("Weighted Ward hierarchy could not select a merge.")
+        ward_delta, left, right = best
+        new_node = n_leaves + step
+        left_node = nodes[left]
+        right_node = nodes[right]
+        merged_count = int(left_node["count"] + right_node["count"])
+        merged_center = (
+            left_node["center"] * left_node["count"]
+            + right_node["center"] * right_node["count"]
+        ) / merged_count
+        merged_leaves = sorted(left_node["leaves"] + right_node["leaves"])
+        height = max(previous_height, math.sqrt(max(float(ward_delta), 0.0)))
+        previous_height = height
+        nodes[new_node] = {
+            "center": merged_center,
+            "count": merged_count,
+            "leaves": merged_leaves,
+        }
+        active.remove(left)
+        active.remove(right)
+        active.add(new_node)
+        linkage_rows.append([float(left), float(right), height, float(merged_count)])
+        merge_rows.append(
+            {
+                "merge_step": step + 1,
+                "clusters_after_merge": n_leaves - step - 1,
+                "left_node": left,
+                "right_node": right,
+                "parent_node": new_node,
+                "left_count": int(left_node["count"]),
+                "right_count": int(right_node["count"]),
+                "parent_count": merged_count,
+                "ward_sse_increase": float(ward_delta),
+                "dendrogram_height": height,
+                "left_leaf_clusters": ",".join(map(str, left_node["leaves"])),
+                "right_leaf_clusters": ",".join(map(str, right_node["leaves"])),
+                "parent_leaf_clusters": ",".join(map(str, merged_leaves)),
+            }
+        )
+        cuts[len(active)] = [nodes[node]["leaves"].copy() for node in sorted(active)]
+    return np.asarray(linkage_rows, dtype=np.float64), pd.DataFrame(merge_rows), cuts
+
+
+def labels_from_hierarchy_cut(
+    leaf_labels: np.ndarray,
+    groups: list[list[int]],
+    n_leaves: int,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    ordered = sorted((sorted(group) for group in groups), key=lambda group: min(group))
+    mapping = np.full(n_leaves, -1, dtype=np.int32)
+    rows = []
+    for cluster, leaves in enumerate(ordered):
+        mapping[np.asarray(leaves, dtype=np.int32)] = cluster
+        rows.append(
+            {
+                "hierarchical_cluster": cluster,
+                "leaf_k": n_leaves,
+                "leaf_clusters": ",".join(map(str, leaves)),
+                "n_leaf_clusters": len(leaves),
+            }
+        )
+    if np.any(mapping < 0):
+        raise RuntimeError("Hierarchy cut does not cover every leaf cluster.")
+    return mapping[np.asarray(leaf_labels, dtype=np.int32)], pd.DataFrame(rows)
+
+
+def plot_hierarchy_tree(path: Path, linkage: np.ndarray, title: str, n_leaves: int) -> None:
+    fig, axis = plt.subplots(figsize=(12, 6))
+    dendrogram(
+        linkage, labels=[f"leaf {leaf}" for leaf in range(n_leaves)],
+        leaf_rotation=45, leaf_font_size=8, color_threshold=0, above_threshold_color="#333333",
+        ax=axis,
+    )
+    axis.set_title(title)
+    axis.set_xlabel(f"flat k={n_leaves} leaf cluster")
+    axis.set_ylabel("sqrt(weighted Ward SSE increase)")
+    axis.grid(axis="y", alpha=0.2)
+    fig.savefig(path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def validate_nested_labels(
+    labels_by_k: dict[int, np.ndarray],
+    mode: str,
+    scope: str,
+) -> list[dict[str, Any]]:
+    rows = []
+    ordered = sorted(labels_by_k)
+    for low_k, high_k in zip(ordered[:-1], ordered[1:]):
+        low = labels_by_k[low_k]
+        high = labels_by_k[high_k]
+        violations = 0
+        for high_cluster in np.unique(high):
+            if len(np.unique(low[high == high_cluster])) != 1:
+                violations += 1
+        rows.append(
+            {
+                "mode": mode,
+                "scope": scope,
+                "lower_k": low_k,
+                "higher_k": high_k,
+                "higher_clusters_checked": int(len(np.unique(high))),
+                "nesting_violations": violations,
+                "is_strict_refinement": violations == 0,
+            }
+        )
+    return rows
+
+
+def run_hierarchical_analysis(
+    output_dir: Path,
+    sections: list[str],
+    metadata: dict[str, pd.DataFrame],
+    joint_space: np.ndarray,
+    independent_spaces: dict[str, np.ndarray],
+    offsets: dict[str, tuple[int, int]],
+    neighbors: dict[str, np.ndarray],
+    all_celltypes: np.ndarray,
+    joint_metric_idx: np.ndarray,
+    section_metric_idx: dict[str, np.ndarray],
+    joint_label_asw: float,
+    independent_label_asw: dict[str, float],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    hierarchy_k = sorted(set(args.plot_k))
+    leaf_k = max(hierarchy_k)
+    if leaf_k not in args.joint_k or leaf_k not in args.independent_k:
+        raise ValueError("The largest hierarchy k must exist in both flat joint and independent results.")
+    hierarchy_dir = output_dir / "hierarchical_clustering"
+    tree_dir = hierarchy_dir / "trees"
+    metrics_dir = hierarchy_dir / "metrics"
+    tree_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    cluster_rows: list[dict[str, Any]] = []
+    label_rows: list[dict[str, Any]] = []
+    spatial_rows: list[dict[str, Any]] = []
+    validation_rows: list[dict[str, Any]] = []
+
+    print(f"[analysis] weighted-Ward joint hierarchy from flat k={leaf_k}", flush=True)
+    joint_leaf_labels = np.load(
+        output_dir / "clustering" / f"joint_k{leaf_k}" / "labels_all.npy", mmap_mode="r"
+    )
+    centers, counts = cluster_centers_from_labels(joint_space, joint_leaf_labels, leaf_k)
+    linkage, merges, cuts = build_weighted_ward_tree(centers, counts)
+    np.save(tree_dir / "joint_linkage.npy", linkage)
+    merges.to_csv(tree_dir / "joint_tree_merges.csv", index=False)
+    plot_hierarchy_tree(
+        tree_dir / "joint_dendrogram.png", linkage,
+        f"joint weighted-Ward hierarchy from flat k={leaf_k}", leaf_k,
+    )
+    joint_hierarchical: dict[int, np.ndarray] = {}
+    for k in hierarchy_k:
+        labels_all, mapping = labels_from_hierarchy_cut(joint_leaf_labels, cuts[k], leaf_k)
+        joint_hierarchical[k] = labels_all
+        label_dir = hierarchy_dir / f"joint_k{k}"
+        files = save_label_arrays(label_dir, sections, labels_all, offsets)
+        mapping.to_csv(label_dir / f"leaf_k{leaf_k}_to_cluster_k{k}.csv", index=False)
+        internal = cluster_metrics(joint_space, labels_all, joint_metric_idx)
+        cluster_rows.append(
+            {
+                "mode": "joint", "scope": "combined", "k": k,
+                "n_obs": len(labels_all), "embedding_dim": 128, **internal,
+                "metric_space": "standardized_embedding", "labels_path": files["all"],
+            }
+        )
+        label_rows.append(
+            {
+                "mode": "joint", "scope": "combined", "label": "celltype", "k": k,
+                **external_metrics(all_celltypes, labels_all),
+                "label_asw": joint_label_asw,
+                "label_asw_scaled": (joint_label_asw + 1.0) / 2.0,
+            }
+        )
+        labels_by_section = {}
+        count_rows = []
+        for section in sections:
+            start, end = offsets[section]
+            values = labels_all[start:end]
+            labels_by_section[section] = values
+            spatial_rows.append(
+                {
+                    "mode": "joint", "k": k, "section": section,
+                    "n_obs": len(values), "spatial_neighbor_k": args.spatial_neighbor_k,
+                    "neighbor_same_cluster_fraction": spatial_agreement(values, neighbors[section]),
+                    "labels_path": files[section],
+                }
+            )
+            for cluster, count in zip(*np.unique(values, return_counts=True)):
+                count_rows.append(
+                    {"section": section, "cluster": int(cluster), "count": int(count), "fraction": count / len(values)}
+                )
+        pd.DataFrame(count_rows).to_csv(label_dir / "cluster_counts.csv", index=False)
+        plot_spatial_panels(
+            label_dir / "spatial_all_sections.png", sections, metadata, labels_by_section,
+            f"nested joint weighted-Ward cut, k={k}", args.plot_sample_per_section, args.seed, k,
+        )
+    validation_rows.extend(validate_nested_labels(joint_hierarchical, "joint", "combined"))
+
+    independent_hierarchical: dict[str, dict[int, np.ndarray]] = {}
+    cut_mappings: dict[str, dict[int, pd.DataFrame]] = {}
+    for section in sections:
+        print(f"[analysis] weighted-Ward independent hierarchy: {section}", flush=True)
+        leaf_labels = np.load(
+            output_dir / "clustering" / f"independent_k{leaf_k}" / f"labels_{section}.npy",
+            mmap_mode="r",
+        )
+        centers, counts = cluster_centers_from_labels(independent_spaces[section], leaf_labels, leaf_k)
+        linkage, merges, cuts = build_weighted_ward_tree(centers, counts)
+        np.save(tree_dir / f"independent_{section}_linkage.npy", linkage)
+        merges.to_csv(tree_dir / f"independent_{section}_tree_merges.csv", index=False)
+        plot_hierarchy_tree(
+            tree_dir / f"independent_{section}_dendrogram.png", linkage,
+            f"{section} weighted-Ward hierarchy from flat k={leaf_k}", leaf_k,
+        )
+        independent_hierarchical[section] = {}
+        cut_mappings[section] = {}
+        for k in hierarchy_k:
+            labels, mapping = labels_from_hierarchy_cut(leaf_labels, cuts[k], leaf_k)
+            independent_hierarchical[section][k] = labels
+            cut_mappings[section][k] = mapping
+        validation_rows.extend(
+            validate_nested_labels(independent_hierarchical[section], "independent", section)
+        )
+
+    for k in hierarchy_k:
+        label_dir = hierarchy_dir / f"independent_k{k}"
+        label_dir.mkdir(parents=True, exist_ok=True)
+        labels_by_section = {}
+        count_rows = []
+        for section in sections:
+            labels = independent_hierarchical[section][k]
+            labels_by_section[section] = labels
+            label_path = label_dir / f"labels_{section}.npy"
+            np.save(label_path, labels)
+            mapping = cut_mappings[section][k].copy()
+            mapping.insert(0, "section", section)
+            mapping.to_csv(label_dir / f"leaf_k{leaf_k}_to_cluster_k{k}_{section}.csv", index=False)
+            internal = cluster_metrics(independent_spaces[section], labels, section_metric_idx[section])
+            cluster_rows.append(
+                {
+                    "mode": "independent", "scope": section, "k": k,
+                    "n_obs": len(labels), "embedding_dim": 128, **internal,
+                    "metric_space": "standardized_embedding", "labels_path": str(label_path),
+                }
+            )
+            truth = metadata[section]["celltype"].astype(str).to_numpy()
+            label_rows.append(
+                {
+                    "mode": "independent", "scope": section, "label": "celltype", "k": k,
+                    **external_metrics(truth, labels),
+                    "label_asw": independent_label_asw[section],
+                    "label_asw_scaled": (independent_label_asw[section] + 1.0) / 2.0,
+                }
+            )
+            spatial_rows.append(
+                {
+                    "mode": "independent", "k": k, "section": section,
+                    "n_obs": len(labels), "spatial_neighbor_k": args.spatial_neighbor_k,
+                    "neighbor_same_cluster_fraction": spatial_agreement(labels, neighbors[section]),
+                    "labels_path": str(label_path),
+                }
+            )
+            for cluster, count in zip(*np.unique(labels, return_counts=True)):
+                count_rows.append(
+                    {"section": section, "cluster": int(cluster), "count": int(count), "fraction": count / len(labels)}
+                )
+        pd.DataFrame(count_rows).to_csv(label_dir / "cluster_counts.csv", index=False)
+        plot_spatial_panels(
+            label_dir / "spatial_all_sections.png", sections, metadata, labels_by_section,
+            f"nested independent weighted-Ward cut, k={k}", args.plot_sample_per_section, args.seed, k,
+        )
+
+    cluster_frame = pd.DataFrame(cluster_rows)
+    label_frame = pd.DataFrame(label_rows)
+    spatial_frame = pd.DataFrame(spatial_rows)
+    validation_frame = pd.DataFrame(validation_rows)
+    if not bool(validation_frame["is_strict_refinement"].all()):
+        raise RuntimeError("The generated hierarchy failed its nested-refinement validation.")
+    cluster_frame.to_csv(metrics_dir / "clustering_metrics.csv", index=False)
+    label_frame.to_csv(metrics_dir / "clustering_metrics_by_label.csv", index=False)
+    spatial_frame.to_csv(metrics_dir / "spatial_continuity.csv", index=False)
+    spatial_frame.groupby(["mode", "k"], as_index=False)["neighbor_same_cluster_fraction"].mean().to_csv(
+        metrics_dir / "spatial_continuity_summary.csv", index=False
+    )
+    validation_frame.to_csv(metrics_dir / "hierarchy_validation.csv", index=False)
+    hierarchy_config = {
+        "method": "size-weighted Ward agglomeration of flat MiniBatchKMeans leaf centroids",
+        "leaf_k": leaf_k,
+        "cut_k_values": hierarchy_k,
+        "nested_refinement_validated": True,
+        "joint_dendrogram": str(tree_dir / "joint_dendrogram.png"),
+        "tree_directory": str(tree_dir),
+        "metrics_directory": str(metrics_dir),
+    }
+    write_json(hierarchy_dir / "hierarchy_config.json", hierarchy_config)
+    return hierarchy_config
 
 
 def summarize_ot(run_dir: Path, output_dir: Path) -> pd.DataFrame:
@@ -405,6 +880,8 @@ def make_summary(
     batch: dict[str, Any],
     ot_frame: pd.DataFrame,
     training: dict[str, Any],
+    celltype_reference: dict[str, Any],
+    hierarchy: Optional[dict[str, Any]],
 ) -> None:
     joint = cluster_metrics_frame[cluster_metrics_frame["mode"].eq("joint")]
     best_internal = joint.loc[joint["cluster_asw"].idxmax()]
@@ -434,6 +911,10 @@ def make_summary(
         f"- training loss: {training['first_total_loss']:.4f} -> {training['last_total_loss']:.4f}",
         f"- final OT pairs: {len(ot_frame)}; mean topology-changed fraction="
         f"{ot_frame['topology_topk_changed_fraction'].mean():.4f}",
+        f"- celltype reference plot: {celltype_reference['n_celltypes']} annotated classes",
+        "- batch correction applied before training: no (Harmony=false)",
+        "- balanced feature selection: section-balanced HVG/SVD fitting; this is not batch correction",
+        f"- nested hierarchy: {'enabled and validated' if hierarchy is not None else 'skipped'}",
         "",
         "## Mean spatial neighbor agreement",
         "",
@@ -481,6 +962,10 @@ def main() -> None:
     )
     all_celltypes = np.concatenate([metadata[s]["celltype"].astype(str).to_numpy() for s in sections])
     all_sections = np.concatenate([np.repeat(s, len(embeddings[s])) for s in sections])
+    print("[analysis] plotting celltype reference annotations", flush=True)
+    celltype_reference = plot_celltype_reference(
+        output_dir, sections, metadata, args.plot_sample_per_section, args.seed
+    )
     joint_metric_idx = sample_indices(total_spots, args.metric_sample_size, args.seed)
     section_metric_idx = {
         section: sample_indices(len(embeddings[section]), args.metric_sample_size, args.seed + i + 1)
@@ -501,9 +986,17 @@ def main() -> None:
     spatial_rows: list[dict[str, Any]] = []
     retained = set(args.plot_k)
     for k in args.joint_k:
-        print(f"[analysis] joint MiniBatchKMeans k={k}", flush=True)
-        labels_all = fit_minibatch(joint_space, k, args)
         label_dir = output_dir / "clustering" / f"joint_k{k}"
+        existing_labels = label_dir / "labels_all.npy"
+        if args.reuse_flat_labels and existing_labels.exists():
+            print(f"[analysis] reusing joint labels k={k}", flush=True)
+            # Copy before save_label_arrays rewrites the same labels_all.npy path.
+            labels_all = np.asarray(np.load(existing_labels, mmap_mode="r"), dtype=np.int32).copy()
+            if labels_all.shape != (total_spots,) or len(np.unique(labels_all)) != k:
+                raise ValueError(f"Existing joint k={k} labels failed shape/cluster validation.")
+        else:
+            print(f"[analysis] joint MiniBatchKMeans k={k}", flush=True)
+            labels_all = fit_minibatch(joint_space, k, args)
         files = save_label_arrays(label_dir, sections, labels_all, offsets)
         internal = cluster_metrics(joint_space, labels_all, joint_metric_idx)
         section_external = external_metrics(all_sections, labels_all)
@@ -547,20 +1040,26 @@ def main() -> None:
         if k in retained:
             plot_spatial_panels(
                 label_dir / "spatial_all_sections.png", sections, metadata, labels_by_section,
-                f"joint standardized embedding, k={k}", args.plot_sample_per_section, args.seed
+                f"joint standardized embedding, k={k}", args.plot_sample_per_section, args.seed, k
             )
 
     for k in args.independent_k:
-        print(f"[analysis] independent MiniBatchKMeans k={k}", flush=True)
         label_dir = output_dir / "clustering" / f"independent_k{k}"
         label_dir.mkdir(parents=True, exist_ok=True)
         labels_by_section = {}
         counts = []
         for index, section in enumerate(sections):
-            labels = fit_minibatch(independent_spaces[section], k, args)
-            labels_by_section[section] = labels
             label_path = label_dir / f"labels_{section}.npy"
-            np.save(label_path, labels)
+            if args.reuse_flat_labels and label_path.exists():
+                print(f"[analysis] reusing independent labels {section} k={k}", flush=True)
+                labels = np.load(label_path, mmap_mode="r")
+                if labels.shape != (len(embeddings[section]),) or len(np.unique(labels)) != k:
+                    raise ValueError(f"Existing independent {section} k={k} labels failed validation.")
+            else:
+                print(f"[analysis] independent MiniBatchKMeans {section} k={k}", flush=True)
+                labels = fit_minibatch(independent_spaces[section], k, args)
+                np.save(label_path, labels)
+            labels_by_section[section] = labels
             internal = cluster_metrics(independent_spaces[section], labels, section_metric_idx[section])
             cluster_rows.append(
                 {
@@ -595,7 +1094,7 @@ def main() -> None:
         if k in retained:
             plot_spatial_panels(
                 label_dir / "spatial_all_sections.png", sections, metadata, labels_by_section,
-                f"independent standardized embedding, k={k}", args.plot_sample_per_section, args.seed
+                f"independent standardized embedding, k={k}", args.plot_sample_per_section, args.seed, k
             )
 
     cluster_frame = pd.DataFrame(cluster_rows)
@@ -611,6 +1110,14 @@ def main() -> None:
     for (mode, scope, label), frame in label_frame.groupby(["mode", "scope", "label"]):
         best_rows.append(frame.loc[frame["ari"].idxmax()].to_dict())
     pd.DataFrame(best_rows).to_csv(output_dir / "metrics" / "best_clustering_metrics_by_label.csv", index=False)
+
+    hierarchy_info = None
+    if not args.skip_hierarchy:
+        hierarchy_info = run_hierarchical_analysis(
+            output_dir, sections, metadata, joint_space, independent_spaces, offsets,
+            neighbors, all_celltypes, joint_metric_idx, section_metric_idx,
+            joint_label_asw, independent_label_asw, args,
+        )
 
     batch_idx = sample_indices(total_spots, args.batch_metric_sample_size, args.seed + 100)
     print(f"[analysis] section-mixing diagnostics on {len(batch_idx)} spots", flush=True)
@@ -647,10 +1154,25 @@ def main() -> None:
         "max_iter": args.max_iter,
         "batch_size": args.batch_size,
         "cache": cache_info,
+        "flat_labels_reused": bool(args.reuse_flat_labels),
         "dynamic_candidate_source": "fused",
         "dynamic_context_source": "fused_spatial_context",
         "dynamic_ot_cost": "0.8 * semantic cosine cost + 0.2 * local-context cosine cost",
         "attention_context_gate_enabled": True,
+        "batch_correction": {
+            "applied": False,
+            "harmony_used": False,
+            "section_balanced_hvg_svd": True,
+            "section_balanced_feature_selection_is_batch_correction": False,
+            "note": "Developmental section is biological time; section diagnostics are evaluation-only.",
+        },
+        "cluster_plot_palette": {
+            "type": "discrete",
+            "base": "tab20",
+            "number_of_colors_equals_k": True,
+        },
+        "celltype_reference": celltype_reference,
+        "hierarchy": hierarchy_info,
         "interpretation": {
             "section_metrics": "diagnostic only because section encodes developmental time",
             "sampled_internal_metrics": "required for million-spot scalability",
@@ -661,7 +1183,7 @@ def main() -> None:
     write_json(output_dir / "config.json", config)
     make_summary(
         output_dir, total_spots, sections, cluster_frame, label_frame,
-        spatial_frame, batch_metrics, ot_frame, training
+        spatial_frame, batch_metrics, ot_frame, training, celltype_reference, hierarchy_info
     )
     manifest = {
         "status": "PASS", "output_dir": str(output_dir), "config": str(output_dir / "config.json"),
@@ -673,6 +1195,8 @@ def main() -> None:
             "section_mixing": str(output_dir / "metrics" / "section_mixing_diagnostics.csv"),
             "ot_pairs": str(output_dir / "metrics" / "ot_pair_metrics.csv"),
             "training": str(output_dir / "metrics" / "training_loss_metrics.csv"),
+            "celltype_reference": celltype_reference,
+            "hierarchical_clustering": hierarchy_info,
         },
     }
     write_json(output_dir / "analysis_manifest.json", manifest)

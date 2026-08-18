@@ -39,15 +39,16 @@ def annotate_config(config_path: Path, training_run: Path) -> None:
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     summary_path = training_run / "run_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    dynamic_source = summary.get("dynamic_candidate_source", "fused")
+    dynamic_source = summary.get("dynamic_candidate_source", "final")
     context_gate_enabled = bool(
-        summary.get("attention_context_gate_enabled", True)
+        summary.get("attention_context_gate_enabled", False)
     )
-    model_variant = (
-        "fused_dynamic_ot_without_microenvironment_attention_gate"
-        if dynamic_source == "fused" and not context_gate_enabled
-        else "microenvironment_aware_bidirectional_sparse_uot_fixed_lc0.1"
-    )
+    if dynamic_source == "final" and not context_gate_enabled:
+        model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
+    elif dynamic_source == "fused" and not context_gate_enabled:
+        model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
+    else:
+        model_variant = "microenvironment_aware_bidirectional_sparse_uot_fixed_lc0.1"
     payload.update(
         {
             "training_run": str(training_run),
@@ -285,15 +286,16 @@ def main() -> None:
             encoding="utf-8"
         )
     )
-    dynamic_source = crc_summary.get("dynamic_candidate_source", "fused")
+    dynamic_source = crc_summary.get("dynamic_candidate_source", "final")
     context_gate_enabled = bool(
-        crc_summary.get("attention_context_gate_enabled", True)
+        crc_summary.get("attention_context_gate_enabled", False)
     )
-    model_variant = (
-        "fused_dynamic_ot_without_microenvironment_attention_gate"
-        if dynamic_source == "fused" and not context_gate_enabled
-        else "microenvironment_aware_bidirectional_sparse_uot_fixed_lc0.1"
-    )
+    if dynamic_source == "final" and not context_gate_enabled:
+        model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
+    elif dynamic_source == "fused" and not context_gate_enabled:
+        model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
+    else:
+        model_variant = "microenvironment_aware_bidirectional_sparse_uot_fixed_lc0.1"
     manifest = {
         "analysis": "standardized_embedding_only",
         "training_seed": 42,
