@@ -68,8 +68,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
     parser.add_argument(
         "--dynamic_candidate_source",
-        choices=["fused", "final"],
-        default="final",
+        choices=["fused", "ot", "final"],
+        default="ot",
     )
     parser.add_argument(
         "--disable_context_attention_gate",
@@ -445,6 +445,9 @@ def main() -> None:
             "faiss_train_sample_size": args.faiss_train_sample_size,
             "faiss_query_batch_size": args.faiss_query_batch_size,
             "dynamic_candidate_source": args.dynamic_candidate_source,
+            "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
+            "pre_post_graphsage_parameter_sharing": False,
+            "ot_refresh_embedding_key": "ot_embeddings",
             "attention_context_gate_enabled": not args.disable_context_attention_gate,
             "uot_epsilon": args.uot_epsilon,
             "uot_tau_a": args.uot_tau_a,
@@ -474,7 +477,7 @@ def main() -> None:
                 "lightweight_anndata": True,
                 "float32_inputs": True,
                 "retain_processed_anndata": False,
-                "model_logic_changed": False,
+                "model_logic_changed": True,
             },
             "alignment": audits,
             "feature_shapes": {

@@ -72,8 +72,8 @@ def parse_args():
     parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
     parser.add_argument(
         "--dynamic_candidate_source",
-        choices=["fused", "final"],
-        default="final",
+        choices=["fused", "ot", "final"],
+        default="ot",
     )
     parser.add_argument(
         "--disable_context_attention_gate",
@@ -201,7 +201,7 @@ def initialize_model_ot_prior(model, feature_dict, section_order, args):
 
 def update_model_ot_prior(model, eval_outputs, section_order, args):
     refresh_source = (
-        "final"
+        "ot"
         if args.ot_prior_mode == "dense"
         else str(args.dynamic_candidate_source)
     )
@@ -597,6 +597,9 @@ def run_mousebrain(args):
         "graphsage_self_path_mode": str(
             model_config["graphsage"].get("self_path_mode", "legacy")
         ),
+        "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
+        "pre_post_graphsage_parameter_sharing": False,
+        "ot_refresh_embedding_key": "ot_embeddings",
         "topology_aware_refresh_enabled": bool(
             model_config["uot"].get("topology_aware_refresh_enabled", False)
         ),
@@ -758,6 +761,9 @@ def run_mousebrain(args):
         "graphsage_self_path_mode": str(
             model_config["graphsage"].get("self_path_mode", "legacy")
         ),
+        "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
+        "pre_post_graphsage_parameter_sharing": False,
+        "ot_refresh_embedding_key": "ot_embeddings",
         "topology_aware_refresh_enabled": bool(
             model_config["uot"].get("topology_aware_refresh_enabled", False)
         ),

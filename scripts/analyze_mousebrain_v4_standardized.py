@@ -135,7 +135,17 @@ def main() -> None:
     context_gate_enabled = bool(
         run_summary.get("attention_context_gate_enabled", False)
     )
-    if dynamic_source == "final" and not context_gate_enabled:
+    if dynamic_source == "ot" and not context_gate_enabled:
+        model_variant = "dual_graphsage_with_pre_post_ot_independent_parameters"
+    elif dynamic_source == "ot" and context_gate_enabled:
+        model_variant = "dual_graphsage_with_context_attention_gate"
+    elif (
+        RESULT_ROOT.parents[1].name == "result_v5"
+        and dynamic_source == "final"
+        and not context_gate_enabled
+    ):
+        model_variant = "v5_bidirectional_sparse_uot_fixed_lc0.1_delayed_ot_refresh"
+    elif dynamic_source == "final" and not context_gate_enabled:
         model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
     elif dynamic_source == "final" and context_gate_enabled:
         model_variant = "microenvironment_attention_gate_with_v3_dynamic_ot"
@@ -148,6 +158,7 @@ def main() -> None:
     config.update(
         {
             "training_seed": 42,
+            "model_version": RESULT_ROOT.parents[1].name.removeprefix("result_"),
             "model_variant": model_variant,
             "dynamic_candidate_source": dynamic_source,
             "dynamic_semantic_source": dynamic_source,
@@ -168,6 +179,7 @@ def main() -> None:
         "analysis": str(data.output_root / SCHEME),
         "analysis_scope": "standardized_embedding_only",
         "training_seed": 42,
+        "model_version": RESULT_ROOT.parents[1].name.removeprefix("result_"),
         "model_variant": model_variant,
         "dynamic_candidate_source": dynamic_source,
         "dynamic_semantic_source": dynamic_source,

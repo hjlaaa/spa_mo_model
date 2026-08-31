@@ -168,11 +168,11 @@ def get_default_model_config():
         "uot": {
             "enabled": True,
             "initial_from_modalities": True,
-            # V3 default: dynamic sparse OT refreshes from the current final
-            # embedding and its self-excluded spatial context.  Later fused
-            # refresh experiments remain available through an explicit override.
-            "update_from_final_embedding": True,
-            "dynamic_refresh_source": "final",
+            # Dynamic sparse OT refreshes from the OT-attention output before
+            # the decoder-side GraphSAGE. This prevents post-OT spatial
+            # smoothing from feeding back into subsequent OT matching.
+            "update_from_final_embedding": False,
+            "dynamic_refresh_source": "ot",
             "topology_aware_refresh_enabled": True,
             "topology_context_weight": 0.2,
             "epsilon_init": 0.08,

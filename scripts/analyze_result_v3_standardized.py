@@ -246,7 +246,20 @@ def _annotate(output: Path, dataset: str, removed: list[str]) -> dict:
     )
     semantic_source = dynamic_source
     context_source = f"{dynamic_source}_spatial_context"
-    if dynamic_source == "final" and not context_gate_enabled:
+    architecture = run_summary.get("architecture")
+    if (
+        architecture
+        == "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder"
+        and dynamic_source == "ot"
+    ):
+        model_variant = "v6_dual_graphsage_delayed_ot_refresh"
+    elif (
+        RESULT_ROOT.name == "result_v5"
+        and dynamic_source == "final"
+        and not context_gate_enabled
+    ):
+        model_variant = "v5_bidirectional_sparse_uot_fixed_lc0.1_delayed_ot_refresh"
+    elif dynamic_source == "final" and not context_gate_enabled:
         model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
     elif dynamic_source == "final" and context_gate_enabled:
         model_variant = "microenvironment_attention_gate_with_v3_dynamic_ot"
@@ -257,6 +270,7 @@ def _annotate(output: Path, dataset: str, removed: list[str]) -> dict:
     config.update(
         {
             "training_seed": 42,
+            "model_version": RESULT_ROOT.name.removeprefix("result_"),
             "model_variant": model_variant,
             "graphsage_self_path_mode": "no_self_linear",
             "dynamic_candidate_source": dynamic_source,
@@ -285,6 +299,7 @@ def _annotate(output: Path, dataset: str, removed: list[str]) -> dict:
         "retained_k": retained,
         "dynamic_candidate_source": dynamic_source,
         "attention_context_gate_enabled": context_gate_enabled,
+        "model_variant": model_variant,
         "removed_intermediate_directory_count": len(removed),
     }
 
@@ -298,58 +313,88 @@ def main() -> None:
         default=RESULT_ROOT,
         help="Result root containing the five standardized dataset runs.",
     )
+    parser.add_argument(
+        "--datasets",
+        default="human_lymph_node,misar_seq,mouse_spleen,mouse_thymus,simulation",
+        help=(
+            "Comma-separated dataset keys to analyze. This permits adding new "
+            "datasets without rewriting already completed analyses."
+        ),
+    )
     args = parser.parse_args()
     RESULT_ROOT = args.result_root.resolve()
+    valid_datasets = {
+        "human_lymph_node",
+        "misar_seq",
+        "mouse_spleen",
+        "mouse_thymus",
+        "simulation",
+    }
+    selected = [item.strip() for item in args.datasets.split(",") if item.strip()]
+    unknown = sorted(set(selected).difference(valid_datasets))
+    if not selected or unknown:
+        raise ValueError(
+            f"Invalid --datasets selection {selected}; unknown={unknown}, "
+            f"valid={sorted(valid_datasets)}"
+        )
     manifests: list[dict] = []
 
-    hln_data = _paired_rna_adt_data(hln, "human_lymph_node")
-    hln.validate(hln_data)
-    hln.run_scheme(hln_data, SCHEME)
-    removed = _prune(hln_data.output_root, hln.METRIC_KS, hln.PLOT_KS)
-    manifests.append(_annotate(hln_data.output_root, "Human_Lymph_Node", removed))
-    print("Human_Lymph_Node standardized analysis: PASS", flush=True)
+    if "human_lymph_node" in selected:
+        hln_data = _paired_rna_adt_data(hln, "human_lymph_node")
+        hln.validate(hln_data)
+        hln.run_scheme(hln_data, SCHEME)
+        removed = _prune(hln_data.output_root, hln.METRIC_KS, hln.PLOT_KS)
+        manifests.append(_annotate(hln_data.output_root, "Human_Lymph_Node", removed))
+        print("Human_Lymph_Node standardized analysis: PASS", flush=True)
 
-    misar_data = _misar_data()
-    misar.validate(misar_data)
-    misar.run_scheme(misar_data, SCHEME)
-    removed = _prune(misar_data.output_root, misar.METRIC_KS, misar.PLOT_KS)
-    manifests.append(_annotate(misar_data.output_root, "MISAR-seq", removed))
-    print("MISAR-seq standardized analysis: PASS", flush=True)
+    if "misar_seq" in selected:
+        misar_data = _misar_data()
+        misar.validate(misar_data)
+        misar.run_scheme(misar_data, SCHEME)
+        removed = _prune(misar_data.output_root, misar.METRIC_KS, misar.PLOT_KS)
+        manifests.append(_annotate(misar_data.output_root, "MISAR-seq", removed))
+        print("MISAR-seq standardized analysis: PASS", flush=True)
 
-    spleen_data = _paired_rna_adt_data(spleen, "mouse_spleen")
-    spleen.validate(spleen_data)
-    spleen.run_scheme(spleen_data, SCHEME)
-    removed = _prune(spleen_data.output_root, spleen.METRIC_KS, spleen.PLOT_KS)
-    manifests.append(_annotate(spleen_data.output_root, "Mouse_Spleen", removed))
-    print("Mouse_Spleen standardized analysis: PASS", flush=True)
+    if "mouse_spleen" in selected:
+        spleen_data = _paired_rna_adt_data(spleen, "mouse_spleen")
+        spleen.validate(spleen_data)
+        spleen.run_scheme(spleen_data, SCHEME)
+        removed = _prune(spleen_data.output_root, spleen.METRIC_KS, spleen.PLOT_KS)
+        manifests.append(_annotate(spleen_data.output_root, "Mouse_Spleen", removed))
+        print("Mouse_Spleen standardized analysis: PASS", flush=True)
 
-    thymus_data = _thymus_data()
-    thymus.validate(thymus_data)
-    sample = pd.read_csv(
-        ROOT
-        / "results/mouse_thymus_preprocessing_comparison/shared_metrics/asw_sample.csv"
-    )
-    sample_source = (
-        ROOT
-        / "results/mouse_thymus_preprocessing_comparison/shared_metrics/asw_sample.csv"
-    )
-    sample_target = thymus_data.output_root / "shared_metrics" / "asw_sample.csv"
-    sample_target.parent.mkdir(parents=True)
-    shutil.copy2(sample_source, sample_target)
-    thymus.run_scheme(thymus_data, SCHEME, sample)
-    removed = _prune(thymus_data.output_root, thymus.METRIC_KS, thymus.PLOT_KS)
-    manifests.append(_annotate(thymus_data.output_root, "Mouse_Thymus", removed))
-    print("Mouse_Thymus standardized analysis: PASS", flush=True)
+    if "mouse_thymus" in selected:
+        thymus_data = _thymus_data()
+        thymus.validate(thymus_data)
+        sample = pd.read_csv(
+            ROOT
+            / "results/mouse_thymus_preprocessing_comparison/shared_metrics/asw_sample.csv"
+        )
+        sample_source = (
+            ROOT
+            / "results/mouse_thymus_preprocessing_comparison/shared_metrics/asw_sample.csv"
+        )
+        sample_target = thymus_data.output_root / "shared_metrics" / "asw_sample.csv"
+        sample_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(sample_source, sample_target)
+        thymus.run_scheme(thymus_data, SCHEME, sample)
+        removed = _prune(thymus_data.output_root, thymus.METRIC_KS, thymus.PLOT_KS)
+        manifests.append(_annotate(thymus_data.output_root, "Mouse_Thymus", removed))
+        print("Mouse_Thymus standardized analysis: PASS", flush=True)
 
-    simulation_data = _simulation_data()
-    simulation.validate_method(simulation_data)
-    simulation.run_scheme(simulation_data, SCHEME)
-    manifests.append(_annotate(simulation_data.output_root, "Simulation", []))
-    print("Simulation standardized analysis: PASS", flush=True)
+    if "simulation" in selected:
+        simulation_data = _simulation_data()
+        simulation.validate_method(simulation_data)
+        simulation.run_scheme(simulation_data, SCHEME)
+        manifests.append(_annotate(simulation_data.output_root, "Simulation", []))
+        print("Simulation standardized analysis: PASS", flush=True)
 
     manifest_dynamic_source = manifests[0]["dynamic_candidate_source"]
     manifest_context_gate_enabled = manifests[0]["attention_context_gate_enabled"]
-    if manifest_dynamic_source == "final" and manifest_context_gate_enabled:
+    selected_model_variants = {record["model_variant"] for record in manifests}
+    if len(selected_model_variants) == 1:
+        manifest_model_variant = next(iter(selected_model_variants))
+    elif manifest_dynamic_source == "final" and manifest_context_gate_enabled:
         manifest_model_variant = "microenvironment_attention_gate_with_v3_dynamic_ot"
     elif manifest_dynamic_source == "fused" and not manifest_context_gate_enabled:
         manifest_model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
@@ -373,7 +418,11 @@ def main() -> None:
         "datasets": manifests,
         "created_at": datetime.now().astimezone().isoformat(),
     }
-    path = RESULT_ROOT / "five_dataset_standardized_analysis_manifest.json"
+    path = RESULT_ROOT / (
+        "five_dataset_standardized_analysis_manifest.json"
+        if set(selected) == valid_datasets
+        else "missing_dataset_standardized_analysis_manifest.json"
+    )
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
     print(f"{RESULT_ROOT.name.upper()}_FIVE_DATASET_STANDARDIZED_ANALYSIS: PASS")

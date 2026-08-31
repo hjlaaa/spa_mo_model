@@ -260,8 +260,9 @@ class StageMultiModalModel(nn.Module):
     -> COSIE cross-view loss -> FusionMLP -> 128-d fused embeddings``.
 
     V2 appends weighted residual GraphSAGE, adjacent-stage UOT-guided
-    attention, and modality decoders. UOT is cached as a prior and does not
-    participate in backpropagation.
+    attention, a second independently-parameterized residual GraphSAGE, and
+    modality decoders. UOT is cached as a prior and does not participate in
+    backpropagation.
     """
 
     def __init__(
@@ -325,6 +326,21 @@ class StageMultiModalModel(nn.Module):
 
         graph_cfg = self.config["graphsage"]
         self.graphsage = WeightedResidualGraphSAGE(
+            input_dim=int(graph_cfg["input_dim"]),
+            output_dim=int(graph_cfg["output_dim"]),
+            self_path_mode=graph_cfg.get("self_path_mode", "legacy"),
+            dropout=float(graph_cfg["dropout"]),
+            activation=graph_cfg["activation"],
+            norm=graph_cfg["norm"],
+            residual=bool(graph_cfg["residual"]),
+            edge_batch_size=graph_cfg.get("edge_batch_size", 200000),
+        )
+        # Refine the cross-section OT embedding on the source section's
+        # spatial graph before decoding.  This deliberately does not share
+        # parameters with the pre-OT GraphSAGE above: the first graph module
+        # prepares spatially informed features for OT interaction, while this
+        # module locally propagates the information introduced by OT.
+        self.post_ot_graphsage = WeightedResidualGraphSAGE(
             input_dim=int(graph_cfg["input_dim"]),
             output_dim=int(graph_cfg["output_dim"]),
             self_path_mode=graph_cfg.get("self_path_mode", "legacy"),
@@ -670,15 +686,16 @@ class StageMultiModalModel(nn.Module):
 
         uot_cfg = self.config["uot"]
         source = str(
-            refresh_source or uot_cfg.get("dynamic_refresh_source", "final")
+            refresh_source or uot_cfg.get("dynamic_refresh_source", "ot")
         )
         output_key_by_source = {
+            "ot": "ot_embeddings",
             "final": "final_embeddings",
             "fused": "fused_embeddings",
         }
         if source not in output_key_by_source:
             raise ValueError(
-                f"Unsupported OT refresh_source {source!r}; expected 'final' or 'fused'."
+                f"Unsupported OT refresh_source {source!r}; expected 'ot', 'final', or 'fused'."
             )
         output_key = output_key_by_source[source]
         values = outputs.get(output_key)
@@ -1006,6 +1023,7 @@ class StageMultiModalModel(nn.Module):
         fused_embeddings: dict[str, torch.Tensor] = {}
         context_embeddings: dict[str, torch.Tensor] = {}
         graphsage_embeddings: dict[str, torch.Tensor] = {}
+        ot_embeddings: dict[str, torch.Tensor] = {}
         final_embeddings: dict[str, torch.Tensor] = {}
         latent_dict: dict[str, dict[str, torch.Tensor]] = {}
         reconstructions: dict[str, dict[str, torch.Tensor]] = {}
@@ -1112,11 +1130,13 @@ class StageMultiModalModel(nn.Module):
                     "cache_spatial_graphs": bool(cache_spatial_graphs),
                 },
             )
-            if keep_full_outputs:
-                spatial_graph_dict[section] = {
-                    "edge_index": edge_index,
-                    "edge_weight": edge_weight,
-                }
+            # The second GraphSAGE needs the same graph even in
+            # training_loss_only mode. Keeping tensor references here does not
+            # duplicate the cached graph tensors.
+            spatial_graph_dict[section] = {
+                "edge_index": edge_index,
+                "edge_weight": edge_weight,
+            }
 
             section_latents: dict[str, torch.Tensor] = {}
             for modality in modality_order:
@@ -1207,7 +1227,7 @@ class StageMultiModalModel(nn.Module):
                 keep_full_outputs
                 and not self.training
                 and str(
-                    self.config["uot"].get("dynamic_refresh_source", "final")
+                    self.config["uot"].get("dynamic_refresh_source", "ot")
                 ) == "fused"
                 and bool(self.config["uot"].get("topology_aware_refresh_enabled", False))
                 and float(self.config["uot"].get("topology_context_weight", 0.0)) > 0.0
@@ -1312,7 +1332,7 @@ class StageMultiModalModel(nn.Module):
                     for update in update_lists[section][1:]:
                         update_sum = update_sum + update
                     mean_update = update_sum / float(len(update_lists[section]))
-                    final_embeddings[section] = self.ot_attention.apply_update(
+                    ot_embeddings[section] = self.ot_attention.apply_update(
                         graphsage_embeddings[section],
                         mean_update,
                     )
@@ -1322,17 +1342,17 @@ class StageMultiModalModel(nn.Module):
                         {"section": section, "update_count": int(len(update_lists[section]))},
                     )
                 else:
-                    final_embeddings[section] = graphsage_embeddings[section]
+                    ot_embeddings[section] = graphsage_embeddings[section]
                     messages.append(f"No directional OT update found for {section}; used GraphSAGE output.")
         else:
             for source_section, target_section in zip(resolved_order[:-1], resolved_order[1:]):
                 prior = (self.ot_prior or {}).get((source_section, target_section))
                 if prior is None or not self.config["ot_attention"]["enabled"]:
-                    final_embeddings[source_section] = graphsage_embeddings[source_section]
+                    ot_embeddings[source_section] = graphsage_embeddings[source_section]
                     if prior is None:
                         messages.append(f"No OT prior found for {source_section}->{target_section}; used GraphSAGE output.")
                     continue
-                final_embeddings[source_section] = self.ot_attention(
+                ot_embeddings[source_section] = self.ot_attention(
                     source_h=graphsage_embeddings[source_section],
                     target_h=graphsage_embeddings[target_section],
                     topk_idx=prior["topk_idx"],
@@ -1365,17 +1385,52 @@ class StageMultiModalModel(nn.Module):
 
             if resolved_order:
                 last_section = resolved_order[-1]
-                final_embeddings[last_section] = graphsage_embeddings[last_section]
+                ot_embeddings[last_section] = graphsage_embeddings[last_section]
         _record_forward_memory(
             memory_recorder,
             "ot_attention_end",
             {
-                "final_embedding_shapes": {
+                "ot_embedding_shapes": {
                     section: list(embedding.shape)
-                    for section, embedding in final_embeddings.items()
+                    for section, embedding in ot_embeddings.items()
                 },
             },
         )
+
+        # Apply an independently-parameterized GraphSAGE after OT interaction.
+        # Dynamic OT refreshes explicitly consume ot_embeddings, so this local
+        # decoder-side refinement cannot feed back into later OT matching.
+        for section in resolved_order:
+            graph = spatial_graph_dict[section]
+            if graph_sage_cfg["enabled"]:
+                if use_graph_encoder_checkpoint:
+                    final_embeddings[section] = _checkpoint_graph_encoder_forward(
+                        self.post_ot_graphsage,
+                        ot_embeddings[section],
+                        graph["edge_index"],
+                        graph["edge_weight"],
+                    )
+                else:
+                    final_embeddings[section] = self.post_ot_graphsage(
+                        ot_embeddings[section],
+                        graph["edge_index"],
+                        graph["edge_weight"],
+                    )
+            else:
+                final_embeddings[section] = ot_embeddings[section]
+            _record_forward_memory(
+                memory_recorder,
+                f"section_{section}_post_ot_graphsage_end",
+                {
+                    "section": section,
+                    "post_ot_graphsage_enabled": bool(graph_sage_cfg["enabled"]),
+                    "post_ot_graphsage_shape": list(final_embeddings[section].shape),
+                    "checkpoint_graph_encoder": bool(checkpoint_graph_encoder),
+                    "post_ot_graph_encoder_checkpoint_active": bool(
+                        use_graph_encoder_checkpoint and graph_sage_cfg["enabled"]
+                    ),
+                },
+            )
 
         if self.config["decoder"]["enabled"] and self.config["reconstruction"]["enabled"]:
             for section in resolved_order:
@@ -1439,6 +1494,7 @@ class StageMultiModalModel(nn.Module):
             "fused_embeddings": fused_embeddings,
             "context_embeddings": context_embeddings,
             "graphsage_embeddings": graphsage_embeddings,
+            "ot_embeddings": ot_embeddings,
             "final_embeddings": final_embeddings,
             "latent_dict": latent_dict,
             "reconstructions": reconstructions,

@@ -43,7 +43,13 @@ def annotate_config(config_path: Path, training_run: Path) -> None:
     context_gate_enabled = bool(
         summary.get("attention_context_gate_enabled", False)
     )
-    if dynamic_source == "final" and not context_gate_enabled:
+    if (
+        RESULT_ROOT.name == "result_v5"
+        and dynamic_source == "final"
+        and not context_gate_enabled
+    ):
+        model_variant = "v5_bidirectional_sparse_uot_fixed_lc0.1_delayed_ot_refresh"
+    elif dynamic_source == "final" and not context_gate_enabled:
         model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
     elif dynamic_source == "fused" and not context_gate_enabled:
         model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
@@ -53,6 +59,7 @@ def annotate_config(config_path: Path, training_run: Path) -> None:
         {
             "training_run": str(training_run),
             "training_seed": 42,
+            "model_version": RESULT_ROOT.name.removeprefix("result_"),
             "model_variant": model_variant,
             "graphsage_self_path_mode": "no_self_linear",
             "dynamic_candidate_source": dynamic_source,
@@ -290,7 +297,13 @@ def main() -> None:
     context_gate_enabled = bool(
         crc_summary.get("attention_context_gate_enabled", False)
     )
-    if dynamic_source == "final" and not context_gate_enabled:
+    if (
+        RESULT_ROOT.name == "result_v5"
+        and dynamic_source == "final"
+        and not context_gate_enabled
+    ):
+        model_variant = "v5_bidirectional_sparse_uot_fixed_lc0.1_delayed_ot_refresh"
+    elif dynamic_source == "final" and not context_gate_enabled:
         model_variant = "v3_bidirectional_sparse_uot_fixed_lc0.1"
     elif dynamic_source == "fused" and not context_gate_enabled:
         model_variant = "fused_dynamic_ot_without_microenvironment_attention_gate"
@@ -299,6 +312,7 @@ def main() -> None:
     manifest = {
         "analysis": "standardized_embedding_only",
         "training_seed": 42,
+        "model_version": RESULT_ROOT.name.removeprefix("result_"),
         "model_variant": model_variant,
         "graphsage_self_path_mode": "no_self_linear",
         "dynamic_candidate_source": dynamic_source,

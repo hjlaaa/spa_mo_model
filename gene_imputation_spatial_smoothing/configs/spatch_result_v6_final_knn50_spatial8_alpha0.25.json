@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "run_name": "spatch_result_v6_final_knn50_spatial8_alpha0.25",
+  "description": "COSIE-style KNN imputation after one conservative spatial smoothing step on section2 reference expression.",
+  "project_root": "/home/hujinlan/spa_mo_model",
+  "run_dir": "/home/hujinlan/spa_mo_model/gene_imputation_spatial_smoothing/runs/spatch_result_v6_final_knn50_spatial8_alpha0.25",
+  "model_run_summary": "/home/hujinlan/spa_mo_model/result_v6/spatch/bidirectional_sparse_uot_fixed_lc0.1_seed42/run_summary.json",
+  "spot_metadata": "/home/hujinlan/spa_mo_model/result_v6/spatch/bidirectional_sparse_uot_fixed_lc0.1_seed42/spot_metadata.csv.gz",
+  "target_section": "section1",
+  "source_section": "section2",
+  "target_embedding": "/home/hujinlan/spa_mo_model/result_v6/spatch/bidirectional_sparse_uot_fixed_lc0.1_seed42/final_embeddings_section1.npy",
+  "source_embedding": "/home/hujinlan/spa_mo_model/result_v6/spatch/bidirectional_sparse_uot_fixed_lc0.1_seed42/final_embeddings_section2.npy",
+  "target_rna_h5ad": "/home/hujinlan/spa_mo_model/data/spatch/section1/adata_xenium_bin_filter.h5ad",
+  "source_rna_h5ad": "/home/hujinlan/spa_mo_model/data/spatch/section2/adata_hd_filter.h5ad",
+  "target_gene_rule": "source_only",
+  "baseline_output": "/home/hujinlan/spa_mo_model/gene_imputation/runs/spatch_result_v6_final_knn50/imputed_section1_section2_only_genes.h5",
+  "knn": {
+    "backend": "annoy",
+    "k": 50,
+    "metric": "euclidean",
+    "n_trees": 10,
+    "search_k": -1,
+    "seed": 42,
+    "query_workers": 16,
+    "query_chunk_size": 4096
+  },
+  "smoothing": {
+    "method": "spatial_residual_neighbor_mean",
+    "coordinate_key": "spatial",
+    "coordinate_grid_step_um": 7.994,
+    "radius_grid_units": 1.5,
+    "alpha": 0.25,
+    "exclude_self_from_neighbor_mean": true,
+    "isolated_spot_policy": "self",
+    "iterations": 1
+  },
+  "imputation": {
+    "aggregation": "uniform_mean",
+    "gene_block_size": 64,
+    "output_dtype": "float32",
+    "hdf5_spot_chunk": 2048,
+    "compression": "gzip",
+    "compression_level": 1,
+    "shuffle": true
+  },
+  "comparison": {
+    "sample_target_spots": 20000
+  },
+  "fingerprints": {
+    "full_sha256": true
+  }
+}

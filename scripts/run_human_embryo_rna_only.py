@@ -105,7 +105,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--faiss_train_sample_size", type=int, default=100000)
     parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
-    parser.add_argument("--dynamic_candidate_source", choices=["fused", "final"], default="final")
+    parser.add_argument(
+        "--dynamic_candidate_source",
+        choices=["fused", "ot", "final"],
+        default="ot",
+    )
     parser.add_argument("--spatial_knn_k", type=int, default=5)
     parser.add_argument("--graphsage_edge_batch_size", type=int, default=200000)
     parser.add_argument("--decoder_chunk_size", type=int, default=50000)
@@ -382,6 +386,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "rna_source": "layers/counts",
         "ot_prior_mode": "disabled" if args.disable_uot else "candidate_sparse",
         "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
+        "dynamic_candidate_source": args.dynamic_candidate_source,
+        "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
+        "pre_post_graphsage_parameter_sharing": False,
+        "ot_refresh_embedding_key": "ot_embeddings",
         "ot_updates": ot_updates,
         "elapsed_time_sec": float(time.time() - start),
         "gpu_name": torch.cuda.get_device_name(0) if args.device == "cuda" else None,

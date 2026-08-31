@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "run_dir": "/home/hujinlan/spa_mo_model/gene_imputation_spatial_smoothing/runs/spatch_result_v6_final_knn50_spatial8_alpha0.25",
+  "baseline_run_dir": "/home/hujinlan/spa_mo_model/gene_imputation/runs/spatch_result_v6_final_knn50",
+  "output_dir": "/home/hujinlan/spa_mo_model/gene_imputation_spatial_smoothing/runs/spatch_result_v6_final_knn50_spatial8_alpha0.25/figures",
+  "marker_genes": ["IGKC", "COL1A1", "OLFM4", "MUC2", "S100A9", "VWF"],
+  "expression_transform": "log1p",
+  "color_cap_quantile": 0.995,
+  "formats": ["png", "pdf"],
+  "dpi": 220
+}

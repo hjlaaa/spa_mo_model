@@ -109,11 +109,11 @@ def parse_args():
     )
     parser.add_argument(
         "--dynamic_candidate_source",
-        choices=["fused", "final"],
-        default="final",
+        choices=["fused", "ot", "final"],
+        default="ot",
         help=(
-            "Embedding used for dynamic OT refresh. final is the v3 default; "
-            "fused explicitly enables the later experimental path."
+            "Embedding used for dynamic OT refresh. ot is the post-attention, "
+            "pre-decoder-GraphSAGE representation."
         ),
     )
     parser.add_argument(
@@ -729,10 +729,10 @@ def update_model_ot_prior(
     section_order: list[str],
     args,
 ):
-    # Preserve the original source semantics: dense refresh always uses final
-    # embeddings; only candidate-sparse mode exposes the legacy fused/final option.
+    # Dense refresh also uses the post-attention, pre-decoder-GraphSAGE
+    # embedding so decoder-side spatial smoothing never feeds back into OT.
     refresh_source = (
-        "final" if args.ot_prior_mode == "dense" else str(args.dynamic_candidate_source)
+        "ot" if args.ot_prior_mode == "dense" else str(args.dynamic_candidate_source)
     )
     embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
         eval_outputs,
@@ -1354,6 +1354,11 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 else None
             ),
             "dynamic_candidate_source": args.dynamic_candidate_source,
+            "architecture": (
+                "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder"
+            ),
+            "pre_post_graphsage_parameter_sharing": False,
+            "ot_refresh_embedding_key": "ot_embeddings",
             "attention_context_gate_enabled": not args.disable_context_attention_gate,
             "uot_epsilon": float(args.uot_epsilon),
             "uot_tau_a": float(args.uot_tau_a),

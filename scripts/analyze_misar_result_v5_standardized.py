@@ -32,7 +32,7 @@ def main() -> None:
     manifest = {
         "analysis": "standardized_embedding_only",
         "training_seed": 42,
-        "model_variant": "v3_bidirectional_sparse_uot_fixed_lc0.1_with_delayed_ot_refresh",
+        "model_variant": "dual_graphsage_with_pre_post_ot_independent_parameters",
         "graphsage_self_path_mode": "no_self_linear",
         "dynamic_candidate_source": dataset_manifest["dynamic_candidate_source"],
         "attention_context_gate_enabled": dataset_manifest[

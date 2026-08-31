@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the three result_v5 delayed-OT experiments and their v3 analyses."""
+"""Run the three result_v6 dual-GraphSAGE experiments with result_v5 settings."""
 
 from __future__ import annotations
 
@@ -13,12 +13,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RESULT_ROOT = ROOT / "result_v5"
+RESULT_ROOT = ROOT / "result_v6"
 LOG_ROOT = RESULT_ROOT / "logs"
 STATUS_PATH = RESULT_ROOT / "suite_status.json"
-MOUSE_RUN = "bidirectional_sparse_fixed_lc0.1"
+MOUSE_RUN = "v3_bidirectional_sparse_fixed_lc0.1"
 OTHER_RUN = "bidirectional_sparse_uot_fixed_lc0.1_seed42"
 EXPECTED_OT_UPDATES = [100, 120, 140, 160, 180, 200]
+EXPECTED_DYNAMIC_SOURCE = "ot"
+EXPECTED_ARCHITECTURE = (
+    "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder"
+)
 
 
 def now() -> str:
@@ -99,7 +103,7 @@ def commands(python: str) -> list[tuple[str, list[str], bool]]:
                 "--faiss_nprobe", "32", "--faiss_device", "auto",
                 "--faiss_train_sample_size", "10000",
                 "--faiss_query_batch_size", "2048",
-                "--dynamic_candidate_source", "final",
+                "--dynamic_candidate_source", "ot",
                 "--uot_epsilon", "0.05", "--uot_tau_a", "1.0",
                 "--uot_tau_b", "1.0", "--uot_max_iter", "100",
                 "--update_interval", "20", "--spatial_knn_k", "5",
@@ -126,7 +130,7 @@ def commands(python: str) -> list[tuple[str, list[str], bool]]:
                 "--faiss_nprobe", "64", "--faiss_device", "auto",
                 "--faiss_train_sample_size", "100000",
                 "--faiss_query_batch_size", "2048",
-                "--dynamic_candidate_source", "final", "--spatial_knn_k", "5",
+                "--dynamic_candidate_source", "ot", "--spatial_knn_k", "5",
                 "--graphsage_edge_batch_size", "200000",
                 "--decoder_chunk_size", "50000",
                 "--ot_attention_source_chunk_size", "50000",
@@ -150,7 +154,7 @@ def commands(python: str) -> list[tuple[str, list[str], bool]]:
                 "--faiss_train_sample_size", "20000",
                 "--faiss_query_batch_size", "2048",
                 "--initial_modality_candidate_k", "100", "--candidate_k", "200",
-                "--attention_topk", "10", "--dynamic_candidate_source", "final",
+                "--attention_topk", "10", "--dynamic_candidate_source", "ot",
                 "--spatial_knn_k", "5", "--graphsage_edge_batch_size", "50000",
                 "--training_loss_only", "--decoder_chunk_size", "50000",
                 "--ot_attention_source_chunk_size", "50000",
@@ -203,6 +207,19 @@ def validate_training_summary(task_name: str) -> None:
         raise ValueError(
             f"{task_name}: unexpected OT schedule {summary.get('ot_updates')}"
         )
+    if summary.get("dynamic_candidate_source") != EXPECTED_DYNAMIC_SOURCE:
+        raise ValueError(
+            f"{task_name}: unexpected dynamic OT source "
+            f"{summary.get('dynamic_candidate_source')!r}"
+        )
+    if summary.get("architecture") != EXPECTED_ARCHITECTURE:
+        raise ValueError(
+            f"{task_name}: unexpected architecture {summary.get('architecture')!r}"
+        )
+    if summary.get("pre_post_graphsage_parameter_sharing") is not False:
+        raise ValueError(f"{task_name}: GraphSAGE parameters must not be shared.")
+    if summary.get("ot_refresh_embedding_key") != "ot_embeddings":
+        raise ValueError(f"{task_name}: OT refresh must read ot_embeddings.")
     if task_name == "train_human_embryo":
         if summary.get("status") != "PASS" or summary.get("gpu_name") is None:
             raise ValueError("Human embryo summary does not confirm successful GPU training.")
@@ -226,16 +243,18 @@ def main() -> None:
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
     new_status = {
-        "suite": "result_v5_delayed_ot_refresh",
+        "suite": "result_v6_dual_graphsage_delayed_ot_refresh",
         "started_at": now(),
         "python": python,
         "datasets": ["MouseBrain", "Human Embryo", "MISAR-seq"],
         "excluded_datasets": ["SPATCH"],
-        "baseline": "result_v3",
+        "baseline": "result_v5",
         "mousebrain_baseline": str(
-            ROOT / "result_v3/mousebrain/v3_bidirectional_sparse_fixed_lc0.1/epochs_200"
+            ROOT / "result_v5/mousebrain/bidirectional_sparse_fixed_lc0.1/epochs_200"
         ),
         "expected_ot_updates": EXPECTED_OT_UPDATES,
+        "expected_dynamic_ot_source": EXPECTED_DYNAMIC_SOURCE,
+        "expected_architecture": EXPECTED_ARCHITECTURE,
         "status": "running",
         "tasks": {},
     }
@@ -298,8 +317,15 @@ def main() -> None:
         print(f"[{now()}] COMPLETED {name}", flush=True)
     status.update({"status": "completed", "finished_at": now()})
     write_json(STATUS_PATH, status)
-    print(f"[{now()}] RESULT_V5_DELAYED_OT_SUITE: PASS", flush=True)
+    print(f"[{now()}] RESULT_V6_DUAL_GRAPHSAGE_SUITE: PASS", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    exit_path = RESULT_ROOT / "suite.exit"
+    try:
+        main()
+    except BaseException:
+        write_json(exit_path, {"exit_code": 1, "finished_at": now()})
+        raise
+    else:
+        write_json(exit_path, {"exit_code": 0, "finished_at": now()})

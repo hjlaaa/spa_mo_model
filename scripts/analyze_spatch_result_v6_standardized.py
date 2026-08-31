@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the established result_v3 standardized analysis for one SPATCH run."""
+"""Run the result_v5-compatible standardized analysis for SPATCH result_v6."""
 
 from __future__ import annotations
 
@@ -35,8 +35,12 @@ def main() -> None:
     manifest = {
         "analysis": "standardized_embedding_only",
         "training_seed": 42,
-        "model_version": "v5",
-        "model_variant": "v5_bidirectional_sparse_uot_fixed_lc0.1_delayed_ot_refresh",
+        "model_variant": "dual_graphsage_with_pre_post_ot_independent_parameters",
+        "architecture": run_summary.get("architecture"),
+        "pre_post_graphsage_parameter_sharing": run_summary.get(
+            "pre_post_graphsage_parameter_sharing"
+        ),
+        "ot_refresh_embedding_key": run_summary.get("ot_refresh_embedding_key"),
         "graphsage_self_path_mode": "no_self_linear",
         "dynamic_candidate_source": run_summary.get("dynamic_candidate_source", "final"),
         "attention_context_gate_enabled": bool(
@@ -48,7 +52,7 @@ def main() -> None:
     output = base.RESULT_ROOT / "spatch_standardized_analysis_manifest.json"
     output.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
-    print("SPATCH_RESULT_V5_STANDARDIZED_ANALYSIS: PASS", flush=True)
+    print("SPATCH_RESULT_V6_STANDARDIZED_ANALYSIS: PASS", flush=True)
 
 
 if __name__ == "__main__":

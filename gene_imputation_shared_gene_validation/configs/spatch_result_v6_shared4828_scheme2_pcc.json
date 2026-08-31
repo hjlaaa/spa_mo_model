@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "run_name": "spatch_result_v6_shared4828_scheme2_normlog_pcc",
+  "base_validation_config": "/home/hujinlan/spa_mo_model/gene_imputation_shared_gene_validation/configs/spatch_result_v6_shared4828_validation.json",
+  "normalize_total_target_sum": 10000.0,
+  "gene_block_size": 64,
+  "checkpoint_every_blocks": 8,
+  "expression_version": "scheme2_normalize_total_1e4_log1p",
+  "output_prefix": "scheme2_normlog_pcc"
+}

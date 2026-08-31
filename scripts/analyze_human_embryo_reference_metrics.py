@@ -885,6 +885,7 @@ def make_summary(
     training: dict[str, Any],
     celltype_reference: dict[str, Any],
     hierarchy: Optional[dict[str, Any]],
+    harmony_used: bool,
 ) -> None:
     joint = cluster_metrics_frame[cluster_metrics_frame["mode"].eq("joint")]
     best_internal = joint.loc[joint["cluster_asw"].idxmax()]
@@ -915,7 +916,8 @@ def make_summary(
         f"- final OT pairs: {len(ot_frame)}; mean topology-changed fraction="
         f"{ot_frame['topology_topk_changed_fraction'].mean():.4f}",
         f"- celltype reference plot: {celltype_reference['n_celltypes']} annotated classes",
-        "- batch correction applied before training: no (Harmony=false)",
+        f"- Harmony preprocessing before training: {'yes' if harmony_used else 'no'} "
+        f"(`harmony_used={str(harmony_used).lower()}`, batch key: section)",
         "- balanced feature selection: section-balanced HVG/SVD fitting; this is not batch correction",
         f"- nested hierarchy: {'enabled and validated' if hierarchy is not None else 'skipped'}",
         "",
@@ -1122,11 +1124,44 @@ def main() -> None:
             joint_label_asw, independent_label_asw, args,
         )
 
+    run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
+    dynamic_source = str(run_summary.get("dynamic_candidate_source", "final"))
+    context_gate_enabled = bool(
+        run_summary.get("attention_context_gate_enabled", False)
+    )
+    architecture = str(run_summary.get("architecture", "legacy"))
+    model_version = run_dir.parent.name.removeprefix("result_")
+    harmony_used = bool(
+        run_summary.get(
+            "harmony_used",
+            run_summary.get("preprocessing", {}).get("harmony_used", False),
+        )
+    )
+    method_name = (
+        "spa_mo_model_result_v6_dual_graphsage_RNA_only"
+        if "post_OT_GraphSAGE" in architecture
+        else f"spa_mo_model_result_{model_version}_RNA_only"
+    )
+    if "post_OT_GraphSAGE" in architecture:
+        model_variant = "v6_dual_graphsage_delayed_ot_refresh"
+    elif model_version == "v5":
+        model_variant = "v5_bidirectional_sparse_uot_fixed_lc0.1_delayed_ot_refresh"
+    else:
+        model_variant = f"{model_version}_bidirectional_sparse_uot"
+    batch_correction_note = (
+        "GPU Harmony was applied before training with section as the Harmony batch "
+        "key; section diagnostics remain evaluation-only because developmental "
+        "section is biological time."
+        if harmony_used
+        else "Harmony was not used; section diagnostics are evaluation-only because "
+        "developmental section is biological time."
+    )
+
     batch_idx = sample_indices(total_spots, args.batch_metric_sample_size, args.seed + 100)
     print(f"[analysis] section-mixing diagnostics on {len(batch_idx)} spots", flush=True)
     batch_metrics = compute_batch_correction_metrics(
         np.asarray(joint_space[batch_idx]), all_sections[batch_idx],
-        dataset="Human embryo HESTA", method="spa_mo_model_result_v4C_RNA_only",
+        dataset="Human embryo HESTA", method=method_name,
         batch_label_name="developmental_section", max_samples=0,
         asw_sample_size=args.batch_asw_sample_size, lisi_neighbors=90,
         kbet_neighbors=50, seed=args.seed, pcr_components=50,
@@ -1138,7 +1173,10 @@ def main() -> None:
     training = training_diagnostics(run_dir, output_dir)
     config = {
         "dataset": "Human embryo HESTA RNA-only",
-        "method": "spa_mo_model_result_v4C",
+        "method": method_name,
+        "model_version": model_version,
+        "model_variant": model_variant,
+        "architecture": architecture,
         "preprocessing": "standardized_embedding",
         "kmeans_type": "sklearn.cluster.MiniBatchKMeans",
         "joint_metric_k_values": args.joint_k,
@@ -1158,16 +1196,16 @@ def main() -> None:
         "batch_size": args.batch_size,
         "cache": cache_info,
         "flat_labels_reused": bool(args.reuse_flat_labels),
-        "dynamic_candidate_source": "fused",
-        "dynamic_context_source": "fused_spatial_context",
+        "dynamic_candidate_source": dynamic_source,
+        "dynamic_context_source": f"{dynamic_source}_spatial_context",
         "dynamic_ot_cost": "0.8 * semantic cosine cost + 0.2 * local-context cosine cost",
-        "attention_context_gate_enabled": True,
+        "attention_context_gate_enabled": context_gate_enabled,
         "batch_correction": {
-            "applied": False,
-            "harmony_used": False,
+            "applied": harmony_used,
+            "harmony_used": harmony_used,
             "section_balanced_hvg_svd": True,
             "section_balanced_feature_selection_is_batch_correction": False,
-            "note": "Developmental section is biological time; section diagnostics are evaluation-only.",
+            "note": batch_correction_note,
         },
         "cluster_plot_palette": {
             "type": "discrete",
@@ -1186,11 +1224,20 @@ def main() -> None:
     write_json(output_dir / "config.json", config)
     make_summary(
         output_dir, total_spots, sections, cluster_frame, label_frame,
-        spatial_frame, batch_metrics, ot_frame, training, celltype_reference, hierarchy_info
+        spatial_frame, batch_metrics, ot_frame, training, celltype_reference,
+        hierarchy_info, harmony_used
     )
     manifest = {
         "status": "PASS", "output_dir": str(output_dir), "config": str(output_dir / "config.json"),
         "summary": str(output_dir / "SUMMARY.md"),
+        "method": method_name,
+        "model_version": model_version,
+        "model_variant": model_variant,
+        "harmony_used": harmony_used,
+        "architecture": architecture,
+        "dynamic_candidate_source": dynamic_source,
+        "dynamic_context_source": f"{dynamic_source}_spatial_context",
+        "attention_context_gate_enabled": context_gate_enabled,
         "metrics": {
             "clustering": str(output_dir / "metrics" / "clustering_metrics.csv"),
             "labels": str(output_dir / "metrics" / "clustering_metrics_by_label.csv"),
