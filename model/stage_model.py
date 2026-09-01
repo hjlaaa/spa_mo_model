@@ -333,6 +333,7 @@ class StageMultiModalModel(nn.Module):
             activation=graph_cfg["activation"],
             norm=graph_cfg["norm"],
             residual=bool(graph_cfg["residual"]),
+            residual_branch_scale=1.0,
             edge_batch_size=graph_cfg.get("edge_batch_size", 200000),
         )
         # Refine the cross-section OT embedding on the source section's
@@ -348,6 +349,9 @@ class StageMultiModalModel(nn.Module):
             activation=graph_cfg["activation"],
             norm=graph_cfg["norm"],
             residual=bool(graph_cfg["residual"]),
+            residual_branch_scale=float(
+                graph_cfg.get("post_ot_graphsage_scale", 1.0)
+            ),
             edge_batch_size=graph_cfg.get("edge_batch_size", 200000),
         )
 

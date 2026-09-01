@@ -95,6 +95,12 @@ def parse_args():
     parser.add_argument("--update_interval", type=int, default=20)
     parser.add_argument("--spatial_knn_k", type=int, default=5)
     parser.add_argument(
+        "--post_ot_graphsage_scale",
+        type=float,
+        default=1.0,
+        help="Fixed scale on the post-OT GraphSAGE residual branch.",
+    )
+    parser.add_argument(
         "--save_ot_prior_topk",
         action="store_true",
         help="Save sparse top-k OT prior tensors for downstream matching QC.",
@@ -342,6 +348,7 @@ def build_model_config(
     uot_tau_b: float = 1.0,
     uot_max_iter: int = 100,
     spatial_knn_k: int = 5,
+    post_ot_graphsage_scale: float = 1.0,
     context_gate_enabled: bool = False,
 ):
     model_config = get_default_model_config()
@@ -370,6 +377,9 @@ def build_model_config(
         }
     )
     model_config["graph"]["knn_neighbors_spatial"] = int(spatial_knn_k)
+    model_config["graphsage"]["post_ot_graphsage_scale"] = float(
+        post_ot_graphsage_scale
+    )
     model_config["ot_attention"]["context_gate_enabled"] = bool(context_gate_enabled)
     return model_config
 
@@ -508,6 +518,8 @@ def run_mousebrain(args):
         )
     if args.update_interval <= 0:
         raise ValueError("--update_interval must be positive.")
+    if not np.isfinite(args.post_ot_graphsage_scale) or args.post_ot_graphsage_scale < 0:
+        raise ValueError("--post_ot_graphsage_scale must be finite and non-negative.")
 
     seed_everything(int(args.seed))
 
@@ -547,6 +559,7 @@ def run_mousebrain(args):
         uot_tau_b=args.uot_tau_b,
         uot_max_iter=args.uot_max_iter,
         spatial_knn_k=args.spatial_knn_k,
+        post_ot_graphsage_scale=args.post_ot_graphsage_scale,
         context_gate_enabled=not args.disable_context_attention_gate,
     )
     lambda_schedule = parse_lambda_contrast_schedule(args.lambda_contrast_schedule)
@@ -594,6 +607,7 @@ def run_mousebrain(args):
         "uot_max_iter": int(args.uot_max_iter),
         "update_interval": int(args.update_interval),
         "spatial_knn_k": int(args.spatial_knn_k),
+        "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
         "graphsage_self_path_mode": str(
             model_config["graphsage"].get("self_path_mode", "legacy")
         ),
@@ -758,6 +772,7 @@ def run_mousebrain(args):
         "uot_max_iter": int(args.uot_max_iter),
         "update_interval": int(args.update_interval),
         "spatial_knn_k": int(args.spatial_knn_k),
+        "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
         "graphsage_self_path_mode": str(
             model_config["graphsage"].get("self_path_mode", "legacy")
         ),

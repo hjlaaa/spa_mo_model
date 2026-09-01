@@ -113,6 +113,12 @@ def parse_args():
     parser.add_argument("--uot_max_iter", type=int, default=100)
     parser.add_argument("--spatial_knn_k", type=int, default=5)
     parser.add_argument("--graphsage_edge_batch_size", type=int, default=50000)
+    parser.add_argument(
+        "--post_ot_graphsage_scale",
+        type=float,
+        default=1.0,
+        help="Fixed scale on the post-OT GraphSAGE residual branch.",
+    )
     parser.add_argument("--graphsage_dropout", type=float, default=0.1)
     parser.add_argument("--encoder_dropout", type=float, default=0.1)
     parser.add_argument("--fusion_dropout", type=float, default=0.1)
@@ -380,6 +386,9 @@ def make_model_config(args) -> dict[str, Any]:
     config["uot"]["update_interval"] = int(args.update_interval)
     config["graph"]["knn_neighbors_spatial"] = int(args.spatial_knn_k)
     config["graphsage"]["edge_batch_size"] = int(args.graphsage_edge_batch_size)
+    config["graphsage"]["post_ot_graphsage_scale"] = float(
+        args.post_ot_graphsage_scale
+    )
     config["reconstruction"]["lambda_by_modality"]["ATAC"] = 1.0
     return config
 
@@ -397,6 +406,8 @@ def validate_args(args) -> None:
         raise ValueError("--epochs must be positive when --train is set.")
     if args.amp_dtype != "none" and args.device != "cuda":
         raise ValueError("--amp_dtype can only be enabled with --device cuda.")
+    if not np.isfinite(args.post_ot_graphsage_scale) or args.post_ot_graphsage_scale < 0:
+        raise ValueError("--post_ot_graphsage_scale must be finite and non-negative.")
     for name in [
         "initial_modality_candidate_k",
         "candidate_k",
@@ -680,6 +691,7 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             "uot_stabilizer": float(args.uot_stabilizer),
             "spatial_knn_k": int(args.spatial_knn_k),
             "graphsage_edge_batch_size": int(args.graphsage_edge_batch_size),
+            "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             "training_loss_only": bool(args.training_loss_only),
             "decoder_chunk_size": int(args.decoder_chunk_size),
             "ot_attention_source_chunk_size": int(args.ot_attention_source_chunk_size),

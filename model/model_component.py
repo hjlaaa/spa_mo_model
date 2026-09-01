@@ -169,6 +169,7 @@ class WeightedResidualGraphSAGE(nn.Module):
         activation: str = "GELU",
         norm: str | None = "LayerNorm",
         residual: bool = True,
+        residual_branch_scale: float = 1.0,
         edge_batch_size: int | None = 200000,
     ):
         super().__init__()
@@ -177,6 +178,12 @@ class WeightedResidualGraphSAGE(nn.Module):
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.residual = bool(residual)
+        self.residual_branch_scale = float(residual_branch_scale)
+        if (
+            not math.isfinite(self.residual_branch_scale)
+            or self.residual_branch_scale < 0.0
+        ):
+            raise ValueError("residual_branch_scale must be a finite non-negative value.")
         self.self_path_mode = str(self_path_mode)
         supported_self_path_modes = {"legacy", "no_adj_self", "no_self_linear"}
         if self.self_path_mode not in supported_self_path_modes:
@@ -239,7 +246,7 @@ class WeightedResidualGraphSAGE(nn.Module):
         out = self.activation(self_message + neighbor_message + self.bias)
         out = self.dropout(out)
         if self.residual:
-            out = x + out
+            out = x + self.residual_branch_scale * out
         if self.norm is not None:
             out = self.norm(out)
         if not return_diagnostics:

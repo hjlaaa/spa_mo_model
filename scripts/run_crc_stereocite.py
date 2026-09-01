@@ -151,6 +151,12 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--post_ot_graphsage_scale",
+        type=float,
+        default=1.0,
+        help="Fixed scale on the post-OT GraphSAGE residual branch.",
+    )
+    parser.add_argument(
         "--training_loss_only",
         action="store_true",
         help="During train epochs, return only loss tensors/scalars instead of full graph-bearing outputs.",
@@ -990,6 +996,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         raise ValueError("--max_shared_genes must be positive when provided.")
     if args.train and args.epochs <= 0:
         raise ValueError("--epochs must be positive when --train is set.")
+    if not np.isfinite(args.post_ot_graphsage_scale) or args.post_ot_graphsage_scale < 0:
+        raise ValueError("--post_ot_graphsage_scale must be finite and non-negative.")
     for name in [
         "initial_modality_candidate_k",
         "candidate_k",
@@ -1188,6 +1196,9 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         model_config["uot"]["update_interval"] = int(args.update_interval)
         model_config["graph"]["knn_neighbors_spatial"] = int(args.spatial_knn_k)
         model_config["graphsage"]["edge_batch_size"] = int(args.graphsage_edge_batch_size)
+        model_config["graphsage"]["post_ot_graphsage_scale"] = float(
+            args.post_ot_graphsage_scale
+        )
         memory_monitor.reset_peak()
         memory_monitor.record("model_init_start")
         model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
@@ -1366,6 +1377,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "uot_stabilizer": float(args.uot_stabilizer),
             "spatial_knn_k": int(args.spatial_knn_k),
             "graphsage_edge_batch_size": int(args.graphsage_edge_batch_size),
+            "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             "training_loss_only": bool(args.training_loss_only),
             "decoder_chunk_size": int(args.decoder_chunk_size),
             "ot_attention_source_chunk_size": int(args.ot_attention_source_chunk_size),

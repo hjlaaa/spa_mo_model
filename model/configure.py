@@ -161,6 +161,9 @@ def get_default_model_config():
             "activation": "GELU",
             "norm": "LayerNorm",
             "residual": True,
+            # V6-compatible default. Versioned experiment configs override
+            # only this post-OT GraphSAGE residual/neighbor branch scale.
+            "post_ot_graphsage_scale": 1.0,
             "use_distance_weight": True,
             "delta": 1e-8,
             "edge_batch_size": 200000,

@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
+import os
+import shutil
 import sys
 import time
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import anndata as ad
@@ -37,6 +41,12 @@ FILES = {
     "section1": ("adata_xenium_bin_filter.h5ad", "adata_codex_bin_filter.h5ad", "adata_he.h5ad"),
     "section2": ("adata_hd_filter.h5ad", "adata_codex_filter.h5ad", "adata_he.h5ad"),
 }
+CACHE_SCHEMA_VERSION = 1
+CACHE_METADATA_FILES = (
+    "spot_metadata.csv.gz",
+    "shared_rna_genes.csv",
+    "protein_markers_after_dapi_removal.csv",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,6 +102,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decoder_chunk_size", type=int, default=8192)
     parser.add_argument("--ot_attention_source_chunk_size", type=int, default=2048)
     parser.add_argument("--amp_dtype", choices=["bf16", "fp16", "none"], default="bf16")
+    parser.add_argument(
+        "--post_ot_graphsage_scale",
+        type=float,
+        default=1.0,
+        help="Fixed scale on the post-OT GraphSAGE residual branch.",
+    )
+    parser.add_argument(
+        "--preprocessed_cache_dir",
+        type=Path,
+        default=None,
+        help="Shared model-ready PCA/Harmony feature cache directory.",
+    )
+    parser.add_argument(
+        "--build_preprocessed_cache",
+        action="store_true",
+        help="Build the shared cache atomically after preprocessing; refuses to overwrite.",
+    )
     parser.add_argument("--no_harmony", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -116,6 +143,270 @@ def canonical_ids(section: str, coords: np.ndarray) -> pd.Index:
     if not values.is_unique:
         raise ValueError(f"{section}: canonical coordinate IDs are not unique.")
     return values
+
+
+def sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def package_version(name: str) -> str | None:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
+def expected_input_paths(data_dir: Path) -> dict[str, dict[str, Path]]:
+    paths: dict[str, dict[str, Path]] = {}
+    for section in SECTIONS:
+        section_dir = data_dir / section
+        paths[section] = {
+            key: section_dir / name
+            for key, name in zip(("RNA", "Protein", "HE"), FILES[section])
+        }
+        for modality, path in paths[section].items():
+            if not path.is_file():
+                raise FileNotFoundError(f"Missing {section} {modality}: {path}")
+    return paths
+
+
+def cache_parameters(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "sections": list(SECTIONS),
+        "modalities": ["RNA", "Protein", "HE"],
+        "n_comps": int(args.n_comps),
+        "hvg_num": int(args.hvg_num),
+        "hvg_num_by_modality": {"RNA": int(args.hvg_num), "Protein": None, "HE": None},
+        "target_sum": None,
+        "use_harmony": not bool(args.no_harmony),
+        "metacell": False,
+        "memory_efficient": True,
+        "retain_processed": False,
+        "dapi_removed": True,
+    }
+
+
+def source_file_records(paths: dict[str, dict[str, Path]]) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for section in SECTIONS:
+        for modality in ("RNA", "Protein", "HE"):
+            path = paths[section][modality].resolve()
+            stat = path.stat()
+            records.append(
+                {
+                    "section": section,
+                    "modality": modality,
+                    "path": str(path),
+                    "size_bytes": int(stat.st_size),
+                    "mtime_ns": int(stat.st_mtime_ns),
+                    "sha256": sha256_file(path),
+                }
+            )
+    return records
+
+
+def validate_source_stats(
+    manifest: dict[str, object],
+    paths: dict[str, dict[str, Path]],
+) -> None:
+    records = {
+        (record["section"], record["modality"]): record
+        for record in manifest["source_files"]
+    }
+    for section in SECTIONS:
+        for modality in ("RNA", "Protein", "HE"):
+            path = paths[section][modality].resolve()
+            record = records.get((section, modality))
+            if record is None:
+                raise ValueError(f"Cache lacks source record for {section}/{modality}.")
+            stat = path.stat()
+            actual = (str(path), int(stat.st_size), int(stat.st_mtime_ns))
+            expected = (
+                record["path"],
+                int(record["size_bytes"]),
+                int(record["mtime_ns"]),
+            )
+            if actual != expected:
+                raise ValueError(
+                    f"SPATCH input changed for {section}/{modality}: {actual} != {expected}."
+                )
+
+
+def save_preprocessed_cache(
+    cache_dir: Path,
+    feature_dict: dict[str, dict[str, torch.Tensor]],
+    spatial_dict: dict[str, np.ndarray],
+    paths: dict[str, dict[str, Path]],
+    audits: dict[str, object],
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    cache_dir = cache_dir.resolve()
+    if cache_dir.exists():
+        raise FileExistsError(f"Refusing to overwrite preprocessing cache: {cache_dir}")
+    temporary = cache_dir.with_name(f".{cache_dir.name}.tmp-{os.getpid()}")
+    temporary.mkdir(parents=True, exist_ok=False)
+    arrays: list[dict[str, object]] = []
+    for section in SECTIONS:
+        for modality in ("RNA", "Protein", "HE"):
+            value = feature_dict[section][modality]
+            array = np.ascontiguousarray(value.detach().cpu().numpy(), dtype=np.float32)
+            relative = f"{section}_{modality}.npy"
+            path = temporary / relative
+            np.save(path, array, allow_pickle=False)
+            arrays.append(
+                {
+                    "kind": "feature",
+                    "section": section,
+                    "modality": modality,
+                    "relative_path": relative,
+                    "shape": list(array.shape),
+                    "dtype": str(array.dtype),
+                    "size_bytes": int(path.stat().st_size),
+                    "sha256": sha256_file(path),
+                }
+            )
+        coords = np.ascontiguousarray(spatial_dict[section], dtype=np.float32)
+        relative = f"{section}_spatial.npy"
+        path = temporary / relative
+        np.save(path, coords, allow_pickle=False)
+        arrays.append(
+            {
+                "kind": "spatial",
+                "section": section,
+                "modality": None,
+                "relative_path": relative,
+                "shape": list(coords.shape),
+                "dtype": str(coords.dtype),
+                "size_bytes": int(path.stat().st_size),
+                "sha256": sha256_file(path),
+            }
+        )
+    artifacts: list[dict[str, object]] = []
+    for name in CACHE_METADATA_FILES:
+        source = args.output_dir / name
+        target = temporary / name
+        shutil.copy2(source, target)
+        artifacts.append(
+            {
+                "relative_path": name,
+                "size_bytes": int(target.stat().st_size),
+                "sha256": sha256_file(target),
+            }
+        )
+    manifest: dict[str, object] = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "dataset": "spatch",
+        "cache_boundary": "model_ready_feature_dict_after_PCA_Harmony",
+        "parameters": cache_parameters(args),
+        "arrays": arrays,
+        "metadata_artifacts": artifacts,
+        "source_files": source_file_records(paths),
+        "alignment": audits,
+        "software_versions": {
+            "python": sys.version,
+            "numpy": np.__version__,
+            "torch": torch.__version__,
+            "anndata": package_version("anndata"),
+            "scanpy": package_version("scanpy"),
+            "harmonypy": package_version("harmonypy"),
+            "scikit-learn": package_version("scikit-learn"),
+        },
+        "preprocessing_sources": {
+            "run_spatch.py": sha256_file(Path(__file__).resolve()),
+            "model/data_preprocessing.py": sha256_file(
+                PROJECT_ROOT / "model/data_preprocessing.py"
+            ),
+        },
+        "created_at": time.time(),
+    }
+    manifest_path = temporary / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary.replace(cache_dir)
+    manifest["manifest_sha256"] = sha256_file(cache_dir / "manifest.json")
+    return manifest
+
+
+def load_preprocessed_cache(
+    cache_dir: Path,
+    data_dir: Path,
+    output_dir: Path,
+    args: argparse.Namespace,
+) -> tuple[
+    dict[str, dict[str, torch.Tensor]],
+    dict[str, np.ndarray],
+    dict[str, object],
+    dict[str, object],
+]:
+    cache_dir = cache_dir.resolve()
+    manifest_path = cache_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Missing SPATCH preprocessing cache manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != CACHE_SCHEMA_VERSION:
+        raise ValueError("Unsupported SPATCH preprocessing cache schema.")
+    if manifest.get("parameters") != cache_parameters(args):
+        raise ValueError(
+            f"SPATCH cache parameters differ: {manifest.get('parameters')} != {cache_parameters(args)}"
+        )
+    expected_sources = manifest.get("preprocessing_sources", {})
+    actual_sources = {
+        "run_spatch.py": sha256_file(Path(__file__).resolve()),
+        "model/data_preprocessing.py": sha256_file(
+            PROJECT_ROOT / "model/data_preprocessing.py"
+        ),
+    }
+    if expected_sources != actual_sources:
+        raise ValueError(
+            f"SPATCH preprocessing implementation changed: {actual_sources} != {expected_sources}."
+        )
+    paths = expected_input_paths(data_dir.resolve())
+    validate_source_stats(manifest, paths)
+    feature_dict: dict[str, dict[str, torch.Tensor]] = {}
+    spatial_dict: dict[str, np.ndarray] = {}
+    for record in manifest["arrays"]:
+        path = cache_dir / record["relative_path"]
+        if not path.is_file() or int(path.stat().st_size) != int(record["size_bytes"]):
+            raise ValueError(f"Invalid cached array file: {path}")
+        if sha256_file(path) != record["sha256"]:
+            raise ValueError(f"Cached array checksum mismatch: {path}")
+        array = np.load(path, allow_pickle=False)
+        if list(array.shape) != record["shape"] or str(array.dtype) != record["dtype"]:
+            raise ValueError(f"Cached array metadata mismatch: {path}")
+        if not np.isfinite(array).all():
+            raise ValueError(f"Cached array contains non-finite values: {path}")
+        section = record["section"]
+        if record["kind"] == "feature":
+            feature_dict.setdefault(section, {})[record["modality"]] = torch.from_numpy(
+                np.ascontiguousarray(array, dtype=np.float32)
+            )
+        else:
+            spatial_dict[section] = np.ascontiguousarray(array, dtype=np.float32)
+    for record in manifest["metadata_artifacts"]:
+        source = cache_dir / record["relative_path"]
+        if sha256_file(source) != record["sha256"]:
+            raise ValueError(f"Cached metadata checksum mismatch: {source}")
+        shutil.copy2(source, output_dir / record["relative_path"])
+    expected_modalities = {"RNA", "Protein", "HE"}
+    for section in SECTIONS:
+        if set(feature_dict.get(section, {})) != expected_modalities:
+            raise ValueError(f"Cache modalities differ for {section}: {feature_dict.get(section, {})}")
+        if section not in spatial_dict:
+            raise ValueError(f"Cache lacks spatial coordinates for {section}.")
+    cache_info = {
+        "mode": "loaded",
+        "path": str(cache_dir),
+        "manifest": str(manifest_path),
+        "manifest_sha256": sha256_file(manifest_path),
+    }
+    return feature_dict, spatial_dict, manifest["alignment"], cache_info
 
 
 def process_memory_gib() -> dict[str, float]:
@@ -145,17 +436,10 @@ def record_memory(output_dir: Path, stage: str) -> None:
 
 
 def inspect_full_inputs(data_dir: Path, output_dir: Path):
-    paths = {}
+    paths = expected_input_paths(data_dir)
     backed = {}
     for section in SECTIONS:
-        section_dir = data_dir / section
-        paths[section] = {
-            key: section_dir / name
-            for key, name in zip(("RNA", "Protein", "HE"), FILES[section])
-        }
         for key, path in paths[section].items():
-            if not path.is_file():
-                raise FileNotFoundError(f"Missing {section} {key}: {path}")
             backed[(section, key)] = ad.read_h5ad(path, backed="r")
 
     try:
@@ -339,6 +623,12 @@ def rename_sections(mapping):
 def main() -> None:
     args = parse_args()
     args.output_dir = args.output_dir.resolve()
+    if not np.isfinite(args.post_ot_graphsage_scale) or args.post_ot_graphsage_scale < 0:
+        raise ValueError("--post_ot_graphsage_scale must be finite and non-negative.")
+    if args.build_preprocessed_cache and args.preprocessed_cache_dir is None:
+        raise ValueError("--build_preprocessed_cache requires --preprocessed_cache_dir.")
+    if args.preprocessed_cache_dir is not None:
+        args.preprocessed_cache_dir = args.preprocessed_cache_dir.resolve()
     if (args.output_dir / "run_summary.json").exists() and not args.overwrite:
         raise FileExistsError(f"Existing result: {args.output_dir}; use --overwrite.")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -351,17 +641,46 @@ def main() -> None:
         gpu = require_gpu(args.device)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-        record_memory(args.output_dir, "input_inspection_start")
-        paths, common_genes, protein_markers, audits = inspect_full_inputs(
-            args.data_dir.resolve(), args.output_dir
-        )
-        record_memory(args.output_dir, "input_inspection_end")
-        feature_dict, spatial_dict, processed = preprocess_modalities_sequentially(
-            paths,
-            common_genes,
-            protein_markers,
-            args,
-        )
+        if args.preprocessed_cache_dir is not None and not args.build_preprocessed_cache:
+            record_memory(args.output_dir, "preprocessed_cache_load_start")
+            feature_dict, spatial_dict, audits, cache_info = load_preprocessed_cache(
+                args.preprocessed_cache_dir,
+                args.data_dir.resolve(),
+                args.output_dir,
+                args,
+            )
+            processed = None
+            record_memory(args.output_dir, "preprocessed_cache_load_end")
+        else:
+            record_memory(args.output_dir, "input_inspection_start")
+            paths, common_genes, protein_markers, audits = inspect_full_inputs(
+                args.data_dir.resolve(), args.output_dir
+            )
+            record_memory(args.output_dir, "input_inspection_end")
+            feature_dict, spatial_dict, processed = preprocess_modalities_sequentially(
+                paths,
+                common_genes,
+                protein_markers,
+                args,
+            )
+            cache_info = {"mode": "disabled", "path": None}
+            if args.build_preprocessed_cache:
+                record_memory(args.output_dir, "preprocessed_cache_save_start")
+                cache_manifest = save_preprocessed_cache(
+                    args.preprocessed_cache_dir,
+                    feature_dict,
+                    spatial_dict,
+                    paths,
+                    audits,
+                    args,
+                )
+                cache_info = {
+                    "mode": "built",
+                    "path": str(args.preprocessed_cache_dir),
+                    "manifest": str(args.preprocessed_cache_dir / "manifest.json"),
+                    "manifest_sha256": cache_manifest["manifest_sha256"],
+                }
+                record_memory(args.output_dir, "preprocessed_cache_save_end")
         section_order = list(SECTIONS)
         config = get_default_model_config()
         config["training"].update(
@@ -383,6 +702,9 @@ def main() -> None:
         )
         config["graph"]["knn_neighbors_spatial"] = args.spatial_knn_k
         config["graphsage"]["edge_batch_size"] = args.graphsage_edge_batch_size
+        config["graphsage"]["post_ot_graphsage_scale"] = float(
+            args.post_ot_graphsage_scale
+        )
         model = StageMultiModalModel(config=config, feature_dict=feature_dict)
         if list(model._resolve_modality_order(feature_dict["section1"])) != ["HE", "RNA", "Protein"]:
             raise ValueError("Unexpected modality order.")
@@ -455,6 +777,7 @@ def main() -> None:
             "uot_stabilizer": args.uot_stabilizer,
             "spatial_knn_k": args.spatial_knn_k,
             "graphsage_edge_batch_size": args.graphsage_edge_batch_size,
+            "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             "training_loss_only": args.training_loss_only,
             "decoder_chunk_size": args.decoder_chunk_size,
             "ot_attention_source_chunk_size": args.ot_attention_source_chunk_size,
@@ -479,6 +802,7 @@ def main() -> None:
                 "retain_processed_anndata": False,
                 "model_logic_changed": True,
             },
+            "preprocessing_cache": cache_info,
             "alignment": audits,
             "feature_shapes": {
                 section: {mod: list(value.shape) for mod, value in mods.items()}
