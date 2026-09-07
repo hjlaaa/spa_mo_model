@@ -31,7 +31,7 @@ from .sparse_uot import (
     update_bidirectional_candidate_sparse_uot_prior_from_embeddings,
     update_candidate_sparse_uot_prior_from_embeddings,
 )
-from .utils import compute_spatial_knn_graph_with_weights
+from .utils import compute_feature_knn_graph, compute_spatial_knn_graph_with_weights
 
 
 def _recursive_update(base: dict[str, Any], updates: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -309,6 +309,7 @@ class StageMultiModalModel(nn.Module):
         self.decoders = nn.ModuleDict()
         self.ot_prior: dict[tuple[str, str], dict[str, Any]] | None = None
         self._spatial_graph_cache: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor]] = {}
+        self._feature_graph_cache: dict[str, torch.Tensor] = {}
 
         self.fusion_modules = nn.ModuleDict()
         for modality_order in self.valid_modality_sets:
@@ -534,6 +535,49 @@ class StageMultiModalModel(nn.Module):
 
         self._spatial_graph_cache.clear()
 
+    @torch.no_grad()
+    def refresh_feature_graph(
+        self,
+        fused_embedding_dict: Mapping[str, torch.Tensor],
+    ) -> None:
+        """Refresh section-wise feature KNN edges from detached fused embeddings."""
+
+        k_spatial = int(self.config["graph"]["knn_neighbors_spatial"])
+        k_feature = (k_spatial + 1) // 2
+        self._feature_graph_cache = {
+            str(section): compute_feature_knn_graph(
+                fused.detach(), k=k_feature, device=fused.device
+            )
+            for section, fused in fused_embedding_dict.items()
+        }
+
+    def _get_pre_ot_graph(
+        self,
+        section: str,
+        fused: torch.Tensor,
+        spatial_edge_index: torch.Tensor,
+        spatial_edge_weight: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self.config["graph"].get("use_feature_graph", False):
+            return spatial_edge_index, spatial_edge_weight
+
+        k_spatial = int(self.config["graph"]["knn_neighbors_spatial"])
+        k_feature = (k_spatial + 1) // 2
+        if section not in self._feature_graph_cache:
+            self._feature_graph_cache[section] = compute_feature_knn_graph(
+                fused.detach(), k=k_feature, device=fused.device
+            )
+        feature_edge_index = self._feature_graph_cache[section].to(fused.device)
+        feature_edge_weight = spatial_edge_weight.new_full(
+            (feature_edge_index.shape[1],), 1.0 / float(k_spatial)
+        )
+        edge_index = torch.cat((spatial_edge_index, feature_edge_index), dim=1)
+        edge_weight = torch.cat((spatial_edge_weight, feature_edge_weight), dim=0)
+        row_sum = edge_weight.new_zeros(fused.shape[0])
+        row_sum.index_add_(0, edge_index[0], edge_weight)
+        edge_weight = edge_weight / row_sum[edge_index[0]]
+        return edge_index, edge_weight
+
     def _get_spatial_graph(
         self,
         section: str,
@@ -687,6 +731,12 @@ class StageMultiModalModel(nn.Module):
         dict[str, Any],
     ]:
         """Prepare detached semantic and local-context inputs for OT refresh."""
+
+        if self.config["graph"].get("use_feature_graph", False):
+            fused_values = outputs.get("fused_embeddings")
+            if not isinstance(fused_values, Mapping) or not fused_values:
+                raise KeyError("Feature graph refresh requires fused_embeddings.")
+            self.refresh_feature_graph(fused_values)
 
         uot_cfg = self.config["uot"]
         source = str(
@@ -1260,16 +1310,24 @@ class StageMultiModalModel(nn.Module):
                     },
                 )
 
+            pre_ot_edge_index, pre_ot_edge_weight = self._get_pre_ot_graph(
+                section,
+                fused,
+                edge_index,
+                edge_weight,
+            )
             if graph_sage_cfg["enabled"]:
                 if use_graph_encoder_checkpoint:
                     graphsage_embeddings[section] = _checkpoint_graph_encoder_forward(
                         self.graphsage,
                         fused,
-                        edge_index,
-                        edge_weight,
+                        pre_ot_edge_index,
+                        pre_ot_edge_weight,
                     )
                 else:
-                    graphsage_embeddings[section] = self.graphsage(fused, edge_index, edge_weight)
+                    graphsage_embeddings[section] = self.graphsage(
+                        fused, pre_ot_edge_index, pre_ot_edge_weight
+                    )
             else:
                 graphsage_embeddings[section] = fused
             _record_forward_memory(

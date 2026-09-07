@@ -306,6 +306,37 @@ def compute_spatial_knn_graph_with_weights(
     return edge_index, edge_weight
 
 
+def compute_feature_knn_graph(fused_embedding, k: int, device=None):
+    """Construct a self-excluded cosine KNN graph with FAISS inner product."""
+
+    import torch
+
+    from .faiss_candidate_search import build_faiss_candidates
+
+    z_feature = torch.nn.functional.normalize(
+        fused_embedding.detach().float(), p=2, dim=1
+    )
+    result = build_faiss_candidates(
+        z_feature,
+        z_feature,
+        candidate_k=k + 1,
+        backend="faiss_flat",
+        faiss_device="gpu" if z_feature.is_cuda else "cpu",
+        query_batch_size=2048,
+    )
+    candidate_idx = torch.as_tensor(result["candidate_idx"], dtype=torch.long)
+    source = torch.arange(candidate_idx.shape[0]).unsqueeze(1)
+    nonself = candidate_idx != source
+    keep = nonself & (nonself.cumsum(dim=1) <= k)
+    target = candidate_idx[keep].reshape(candidate_idx.shape[0], k)
+    edge_index = torch.stack(
+        (source.expand(-1, k).reshape(-1), target.reshape(-1)), dim=0
+    )
+    if device is not None:
+        edge_index = edge_index.to(device)
+    return edge_index
+
+
 def l2_normalize(x, dim: int = -1, eps: float = 1e-8):
     """L2-normalize a tensor along ``dim`` with an epsilon guard."""
 

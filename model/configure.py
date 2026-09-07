@@ -112,7 +112,7 @@ def get_default_model_config():
         "graph": {
             "use_spatial_graph": True,
             "knn_neighbors_spatial": 5,
-            "use_feature_graph": False,
+            "use_feature_graph": True,
         },
         "encoder": {
             "type": "mlp",
