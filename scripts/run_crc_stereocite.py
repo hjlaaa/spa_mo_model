@@ -10,12 +10,9 @@ processed h5ad files.
 from __future__ import annotations
 
 import argparse
-import gc
 import json
 import re
 import sys
-import time
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,9 +25,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model.configure import get_default_model_config
-from model.data_preprocessing import load_cosie_style_data
-from model.stage_model import StageMultiModalModel, should_update_ot
+from training.config import resolve_model_config, parse_dataset_args, describe_run_config
+from training.fit import (
+    json_safe,
+    bytes_to_gib,
+    release_python_and_cuda_cache,
+    amp_enabled,
+    autocast_context,
+    make_grad_scaler,
+    CudaMemoryMonitor,
+    make_forward_memory_recorder,
+    run_one_forward,
+    sparse_prior_kwargs,
+    initialize_model_ot_prior,
+    update_model_ot_prior,
+    train_small_crc_model,
+)
+from data_io.paired import (
+    prepare_rna_var_names_make_unique, read_backed_pair, subset_to_memory,
+)
+from data_io.preprocessing import load_cosie_style_data
+from model.stage_model import StageMultiModalModel
+from model.tensor_utils import tensor_to_numpy
 
 
 SAMPLES = {
@@ -44,12 +60,70 @@ AUTO_SECTION_KEY_MAP = {
 SUFFIX_RE = re.compile(r".+-[0-9]+$")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run CRC Stereo-CITE-seq RNA+Protein pipeline.")
+def get_dataset_defaults():
+    """Current entry defaults; suite arguments remain explicit overrides."""
+    return {
+        'data_dir': "/home/hujinlan/spa_mo_model/data/CRC_Stereo-CITE-seq",
+        'max_spots_per_section': None,
+        'max_shared_genes': 3000,
+        'spot_sampling': "first",
+        'train': False,
+        'epochs': 0,
+        'lambda_contrast': None,
+        'lr': 1e-3,
+        'weight_decay': 0.0,
+        'update_interval': 20,
+        'log_every': 1,
+        'device': "cpu",
+        'candidate_backend': "faiss_ivf",
+        'initial_modality_candidate_k': 100,
+        'candidate_k': 200,
+        'attention_topk': 10,
+        'faiss_nlist': 4096,
+        'faiss_nprobe': 64,
+        'faiss_device': "auto",
+        'faiss_train_sample_size': 100000,
+        'faiss_query_batch_size': 8192,
+        'uot_epsilon': 0.05,
+        'uot_tau_a': 1.0,
+        'uot_tau_b': 1.0,
+        'uot_stabilizer': 1e-8,
+        'spatial_knn_k': 5,
+        'graphsage_edge_batch_size': 200000,
+        'post_ot_graphsage_scale': 1.0,
+        'training_loss_only': False,
+        'decoder_chunk_size': 0,
+        'ot_attention_source_chunk_size': 0,
+        'checkpoint_ot_attention': False,
+        'checkpoint_encoder_fusion': False,
+        'checkpoint_decoder_chunks': False,
+        'checkpoint_graph_encoder': False,
+        'amp_dtype': "none",
+        'cache_spatial_graphs': False,
+        'save_candidate_qc': False,
+        'save_outputs': False,
+        'save_embeddings': False,
+        'save_ot_prior_topk': False,
+        'log_cuda_memory': False,
+        'log_cuda_memory_detail': False,
+        'output_dir': "/home/hujinlan/spa_mo_model/results/crc_stereocite/dry_run_make_unique_pipeline",
+        'seed': 0,
+        'n_comps': 50,
+        'hvg_num': 3000,
+        'uot_max_iter': 100,
+        'no_harmony': False,
+    }
+
+
+def parse_args(
+    argv=None, *, defaults=None, dataset_name="CRC Stereo-CITE-seq",
+    sample_dirs=("CRC_003_bin20", "CRC_006_bin20"),
+):
+    parser = argparse.ArgumentParser(description=f"Run {dataset_name} RNA+Protein pipeline.")
     parser.add_argument(
         "--data_dir",
-        default="/home/hujinlan/spa_mo_model/data/CRC_Stereo-CITE-seq",
-        help="Directory containing CRC_003_bin20 and CRC_006_bin20.",
+        default=None,
+        help=f"Directory containing {sample_dirs[0]} and {sample_dirs[1]}.",
     )
     parser.add_argument(
         "--max_spots_per_section",
@@ -60,82 +134,46 @@ def parse_args():
             "set a positive integer to run a controlled subset."
         ),
     )
-    parser.add_argument("--max_shared_genes", type=int, default=3000)
+    parser.add_argument("--max_shared_genes", type=int, default=None)
     parser.add_argument(
         "--spot_sampling",
         choices=["first", "random"],
-        default="first",
+        default=None,
         help="How to choose the subset spots within each section.",
     )
-    parser.add_argument(
-        "--dry_run",
-        action="store_true",
-        default=True,
-        help="Run one forward pass only. This is the default unless --train is set.",
-    )
-    parser.add_argument("--train", action="store_true", help="Run a small training loop after preprocessing.")
-    parser.add_argument("--epochs", type=int, default=0, help="Number of training epochs when --train is set.")
+    parser.add_argument("--train", action=argparse.BooleanOptionalAction, help="Run a small training loop after preprocessing.", default=None)
+    parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs when --train is set.")
     parser.add_argument("--lambda_contrast", type=float, default=None)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--update_interval", type=int, default=20)
-    parser.add_argument("--log_every", type=int, default=1)
-    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
-    parser.add_argument("--ot_prior_mode", choices=["dense", "candidate_sparse"], default="dense")
-    parser.add_argument(
-        "--bidirectional_ot_attention",
-        action="store_true",
-        help=(
-            "Use synchronous bidirectional adjacent-section OT-guided attention. "
-            "Only changes candidate_sparse OT prior construction when explicitly enabled."
-        ),
-    )
-    parser.add_argument("--candidate_backend", choices=["faiss_ivf", "faiss_flat", "blockwise"], default="faiss_ivf")
-    parser.add_argument("--initial_modality_candidate_k", type=int, default=100)
-    parser.add_argument("--candidate_k", type=int, default=200)
-    parser.add_argument("--attention_topk", type=int, default=10)
-    parser.add_argument("--faiss_nlist", type=int, default=4096)
-    parser.add_argument("--faiss_nprobe", type=int, default=64)
-    parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default="auto")
-    parser.add_argument("--faiss_train_sample_size", type=int, default=100000)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--update_interval", type=int, default=None)
+    parser.add_argument("--log_every", type=int, default=None)
+    parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
+    parser.add_argument("--candidate_backend", choices=["faiss_ivf", "faiss_flat", "blockwise"], default=None)
+    parser.add_argument("--initial_modality_candidate_k", type=int, default=None)
+    parser.add_argument("--candidate_k", type=int, default=None)
+    parser.add_argument("--attention_topk", type=int, default=None)
+    parser.add_argument("--faiss_nlist", type=int, default=None)
+    parser.add_argument("--faiss_nprobe", type=int, default=None)
+    parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default=None)
+    parser.add_argument("--faiss_train_sample_size", type=int, default=None)
     parser.add_argument(
         "--faiss_query_batch_size",
         type=int,
-        default=8192,
+        default=None,
         help=(
             "Number of source embeddings per FAISS index.search call. "
             "Use a smaller value such as 4096/2048/1024 to reduce FAISS GPU temporary memory."
         ),
     )
-    parser.add_argument(
-        "--dynamic_candidate_source",
-        choices=["fused", "ot", "final"],
-        default="ot",
-        help=(
-            "Embedding used for dynamic OT refresh. ot is the post-attention, "
-            "pre-decoder-GraphSAGE representation."
-        ),
-    )
-    parser.add_argument(
-        "--disable_context_attention_gate",
-        action="store_true",
-        default=True,
-        help="Use the v3-compatible 512D attention gate without local-context reliability.",
-    )
-    parser.add_argument(
-        "--enable_context_attention_gate",
-        action="store_false",
-        dest="disable_context_attention_gate",
-        help="Explicitly enable the experimental 513D microenvironment-aware gate.",
-    )
-    parser.add_argument("--uot_epsilon", type=float, default=0.05)
-    parser.add_argument("--uot_tau_a", type=float, default=1.0)
-    parser.add_argument("--uot_tau_b", type=float, default=1.0)
-    parser.add_argument("--uot_stabilizer", type=float, default=1e-8)
+    parser.add_argument("--uot_epsilon", type=float, default=None)
+    parser.add_argument("--uot_tau_a", type=float, default=None)
+    parser.add_argument("--uot_tau_b", type=float, default=None)
+    parser.add_argument("--uot_stabilizer", type=float, default=None)
     parser.add_argument(
         "--spatial_knn_k",
         type=int,
-        default=5,
+        default=None,
         help=(
             "Number of non-self spatial neighbors for the weighted KNN graph. "
             "The graph also includes self-loops."
@@ -144,7 +182,7 @@ def parse_args():
     parser.add_argument(
         "--graphsage_edge_batch_size",
         type=int,
-        default=200000,
+        default=None,
         help=(
             "Number of spatial graph edges processed per GraphSAGE message-passing chunk. "
             "Lower this if GraphSAGE OOMs on full-spot runs."
@@ -153,220 +191,113 @@ def parse_args():
     parser.add_argument(
         "--post_ot_graphsage_scale",
         type=float,
-        default=1.0,
+        default=None,
         help="Fixed scale on the post-OT GraphSAGE residual branch.",
     )
     parser.add_argument(
         "--training_loss_only",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help="During train epochs, return only loss tensors/scalars instead of full graph-bearing outputs.",
+        default=None,
     )
     parser.add_argument(
         "--decoder_chunk_size",
         type=int,
-        default=0,
+        default=None,
         help="If positive, compute decoder reconstruction loss in spot chunks.",
     )
     parser.add_argument(
         "--ot_attention_source_chunk_size",
         type=int,
-        default=0,
+        default=None,
         help="If positive, compute OT-guided attention in source-spot chunks.",
     )
     parser.add_argument(
         "--checkpoint_ot_attention",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help=(
             "Activation-checkpoint each OT-guided attention source chunk during training. "
             "This trades extra backward recomputation time for lower activation memory."
         ),
+        default=None,
     )
     parser.add_argument(
         "--checkpoint_encoder_fusion",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help=(
             "Activation-checkpoint modality-specific encoder and FusionMLP forwards during training. "
             "This trades extra backward recomputation time for lower activation memory."
         ),
+        default=None,
     )
     parser.add_argument(
         "--checkpoint_decoder_chunks",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help=(
             "Activation-checkpoint each chunked decoder reconstruction loss during training. "
             "Requires --decoder_chunk_size > 0 and is most useful with --training_loss_only."
         ),
+        default=None,
     )
     parser.add_argument(
         "--checkpoint_graph_encoder",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help=(
             "Activation-checkpoint the graph encoder forward during training. "
             "The current graph encoder implementation is WeightedResidualGraphSAGE."
         ),
+        default=None,
     )
     parser.add_argument(
         "--amp_dtype",
         choices=["none", "bf16", "fp16"],
-        default="none",
+        default=None,
         help="Optional CUDA autocast dtype for training forward. Default keeps full float32 behavior.",
     )
     parser.add_argument(
         "--cache_spatial_graphs",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help="Cache CPU spatial KNN graphs and move them to the target device in each forward.",
+        default=None,
     )
-    parser.add_argument("--save_candidate_qc", action="store_true")
-    parser.add_argument("--save_outputs", action="store_true", help="Save lightweight run outputs.")
-    parser.add_argument("--save_embeddings", action="store_true", help="Save final embeddings when available.")
+    parser.add_argument("--save_candidate_qc", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--save_outputs", action=argparse.BooleanOptionalAction, help="Save lightweight run outputs.", default=None)
+    parser.add_argument("--save_embeddings", action=argparse.BooleanOptionalAction, help="Save final embeddings when available.", default=None)
     parser.add_argument(
         "--save_ot_prior_topk",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help="Save sparse top-k OT prior when available. Dense P is never saved.",
+        default=None,
     )
     parser.add_argument(
         "--log_cuda_memory",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help="Write per-stage CUDA memory statistics to cuda_memory_trace.jsonl in output_dir.",
+        default=None,
     )
     parser.add_argument(
         "--log_cuda_memory_detail",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         help=(
             "Add optional in-forward CUDA memory detail events to cuda_memory_trace.jsonl. "
             "This is diagnostic-only and implies --log_cuda_memory."
         ),
+        default=None,
     )
     parser.add_argument(
         "--output_dir",
-        default="/home/hujinlan/spa_mo_model/results/crc_stereocite/dry_run_make_unique_pipeline",
+        default=None,
     )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--n_comps", type=int, default=50)
-    parser.add_argument("--hvg_num", type=int, default=3000)
-    parser.add_argument("--uot_max_iter", type=int, default=100)
-    parser.add_argument("--no_harmony", action="store_true", help="Disable Harmony during preprocessing.")
-    return parser.parse_args()
-
-
-def json_safe(value: Any):
-    if isinstance(value, torch.Tensor):
-        if value.ndim == 0:
-            return float(value.detach().cpu())
-        return list(value.shape)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Mapping):
-        return {str(key): json_safe(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [json_safe(item) for item in value]
-    return value
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--n_comps", type=int, default=None)
+    parser.add_argument("--hvg_num", type=int, default=None)
+    parser.add_argument("--uot_max_iter", type=int, default=None)
+    parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, help="Disable Harmony during preprocessing.", default=None)
+    return parse_dataset_args(parser, argv, {**get_dataset_defaults(), **(defaults or {})})
 
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-
-
-def bytes_to_gib(value: int | float | None) -> float | None:
-    if value is None:
-        return None
-    return float(value) / float(1024**3)
-
-
-def release_python_and_cuda_cache() -> None:
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-def amp_enabled(args) -> bool:
-    return bool(args.device == "cuda" and args.amp_dtype != "none")
-
-
-def autocast_context(args):
-    if not amp_enabled(args):
-        return nullcontext()
-    dtype = torch.bfloat16 if args.amp_dtype == "bf16" else torch.float16
-    return torch.autocast(device_type="cuda", dtype=dtype)
-
-
-def make_grad_scaler(args):
-    enabled = bool(args.device == "cuda" and args.amp_dtype == "fp16")
-    return torch.cuda.amp.GradScaler(enabled=enabled)
-
-
-class CudaMemoryMonitor:
-    """Append lightweight CUDA memory events to a JSONL file."""
-
-    def __init__(self, enabled: bool, output_dir: Path, requested_device: str):
-        self.enabled = bool(enabled)
-        self.requested_device = requested_device
-        self.output_path = output_dir / "cuda_memory_trace.jsonl"
-        self.event_count = 0
-        if self.enabled:
-            self.output_path.write_text("", encoding="utf-8")
-
-    def reset_peak(self) -> None:
-        if self.enabled and torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-
-    def record(
-        self,
-        stage: str,
-        epoch: int | None = None,
-        extra: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        if not self.enabled:
-            return {}
-
-        event: dict[str, Any] = {
-            "event_index": int(self.event_count),
-            "time_sec": float(time.time()),
-            "stage": str(stage),
-            "epoch": int(epoch) if epoch is not None else None,
-            "requested_device": self.requested_device,
-            "cuda_available": bool(torch.cuda.is_available()),
-        }
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            device_index = int(torch.cuda.current_device())
-            free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)
-            event.update(
-                {
-                    "device_index": device_index,
-                    "device_name": torch.cuda.get_device_name(device_index),
-                    "allocated_gib": bytes_to_gib(torch.cuda.memory_allocated(device_index)),
-                    "reserved_gib": bytes_to_gib(torch.cuda.memory_reserved(device_index)),
-                    "max_allocated_gib": bytes_to_gib(torch.cuda.max_memory_allocated(device_index)),
-                    "max_reserved_gib": bytes_to_gib(torch.cuda.max_memory_reserved(device_index)),
-                    "free_gib": bytes_to_gib(free_bytes),
-                    "total_gib": bytes_to_gib(total_bytes),
-                }
-            )
-        if extra:
-            event.update(json_safe(dict(extra)))
-
-        with open(self.output_path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(json_safe(event), ensure_ascii=False) + "\n")
-        self.event_count += 1
-        return event
-
-
-def make_forward_memory_recorder(
-    memory_monitor: CudaMemoryMonitor | None,
-    enabled: bool,
-    epoch: int,
-    phase: str,
-):
-    if memory_monitor is None or not enabled or not memory_monitor.enabled:
-        return None
-
-    def record_forward_detail(stage: str, extra: Mapping[str, Any] | None = None) -> None:
-        memory_monitor.record(f"{phase}_detail_{stage}", epoch=epoch, extra=extra)
-
-    return record_forward_detail
 
 
 def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
@@ -375,70 +306,6 @@ def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
         "x": [float(arr[:, 0].min()), float(arr[:, 0].max())],
         "y": [float(arr[:, 1].min()), float(arr[:, 1].max())],
     }
-
-
-def prepare_rna_var_names_make_unique(rna: ad.AnnData) -> tuple[dict[str, Any], pd.DataFrame]:
-    """Apply requested in-memory RNA var-name metadata and make_unique logic."""
-
-    original_symbols = pd.Index(rna.var_names.astype(str))
-    counts = pd.Series(original_symbols).value_counts()
-    was_duplicate = original_symbols.duplicated(keep=False)
-
-    rna.var["gene_symbol_original"] = original_symbols.to_numpy()
-    rna.var["was_duplicate_gene_symbol"] = was_duplicate
-    rna.var["gene_symbol_original_count"] = [int(counts[symbol]) for symbol in original_symbols]
-
-    # The CRC h5ad index can be categorical. Convert to a plain string Index so
-    # AnnData can append engineering suffixes such as "-1" in memory.
-    rna.var_names = pd.Index(original_symbols)
-    rna.var_names_make_unique()
-    if not rna.var_names.is_unique:
-        raise ValueError("RNA var_names are still not unique after var_names_make_unique().")
-    rna.var["gene_symbol_make_unique"] = rna.var_names.astype(str)
-
-    var_table = pd.DataFrame(
-        {
-            "gene_symbol_original": original_symbols.to_numpy(),
-            "gene_symbol_make_unique": rna.var_names.astype(str).to_numpy(),
-            "was_duplicate_gene_symbol": was_duplicate,
-            "gene_symbol_original_count": [int(counts[symbol]) for symbol in original_symbols],
-        }
-    )
-    duplicate_summary = (
-        var_table[var_table["was_duplicate_gene_symbol"]]
-        .groupby("gene_symbol_original", sort=True)
-        .agg(
-            count=("gene_symbol_make_unique", "size"),
-            make_unique_names=("gene_symbol_make_unique", lambda values: ";".join(values)),
-        )
-        .reset_index()
-    )
-
-    info = {
-        "original_shape": list(rna.shape),
-        "var_names_unique_before": False,
-        "make_unique_gene_count": int(rna.n_vars),
-        "make_unique_var_names_is_unique": bool(rna.var_names.is_unique),
-        "duplicate_gene_symbol_groups": int(duplicate_summary.shape[0]),
-        "duplicate_extra_columns": int((duplicate_summary["count"] - 1).sum()) if not duplicate_summary.empty else 0,
-        "artificial_suffix_gene_count": int((var_table["gene_symbol_original"] != var_table["gene_symbol_make_unique"]).sum()),
-        "artificial_suffix_examples": var_table.loc[
-            var_table["gene_symbol_original"] != var_table["gene_symbol_make_unique"],
-            "gene_symbol_make_unique",
-        ].head(20).tolist(),
-    }
-    return info, duplicate_summary
-
-
-def read_backed_pair(data_dir: Path, sample_dir: str) -> tuple[ad.AnnData, ad.AnnData]:
-    sample_path = data_dir / sample_dir
-    rna_path = sample_path / "adata_RNA.h5ad"
-    adt_path = sample_path / "adata_ADT.h5ad"
-    if not rna_path.exists():
-        raise FileNotFoundError(rna_path)
-    if not adt_path.exists():
-        raise FileNotFoundError(adt_path)
-    return ad.read_h5ad(rna_path, backed="r"), ad.read_h5ad(adt_path, backed="r")
 
 
 def validate_rna_adt_alignment(section: str, rna: ad.AnnData, adt: ad.AnnData) -> dict[str, Any]:
@@ -483,18 +350,6 @@ def select_obs_indices(
     raise ValueError(f"Unsupported spot sampling mode: {sampling}")
 
 
-def subset_to_memory(
-    backed: ad.AnnData,
-    obs_indices: np.ndarray | slice,
-    var_names: list[str] | None = None,
-) -> ad.AnnData:
-    view = backed[obs_indices, :] if var_names is None else backed[obs_indices, var_names]
-    subset = view.to_memory()
-    if "spatial" in subset.obsm:
-        subset.obsm["spatial"] = np.asarray(subset.obsm["spatial"]).copy()
-    return subset
-
-
 def summarize_data_dict(data_dict: Mapping[str, list[ad.AnnData | None]]) -> dict[str, Any]:
     summary = {}
     for modality, sections in data_dict.items():
@@ -522,9 +377,11 @@ def summarize_spatial_loc_dict(spatial_loc_dict: Mapping[str, Any]) -> dict[str,
     return {section: list(np.asarray(spatial).shape) for section, spatial in spatial_loc_dict.items()}
 
 
-def rename_section_keys(mapping: Mapping[str, Any]) -> dict[str, Any]:
+def rename_section_keys(mapping: Mapping[str, Any], section_key_map=None) -> dict[str, Any]:
+    if section_key_map is None:
+        section_key_map = AUTO_SECTION_KEY_MAP
     return {
-        AUTO_SECTION_KEY_MAP.get(section, section): value
+        section_key_map.get(section, section): value
         for section, value in mapping.items()
     }
 
@@ -568,7 +425,7 @@ def save_final_embeddings(
     paths = {}
     for section, tensor in final_embeddings.items():
         path = output_dir / f"final_embeddings_{section}.npy"
-        np.save(path, tensor.detach().cpu().numpy())
+        np.save(path, tensor_to_numpy(tensor))
         paths[section] = str(path)
     return paths
 
@@ -619,7 +476,6 @@ def save_ot_prior_topk(
             "n_source": int(final_embeddings[source_section].shape[0]),
             "n_target": int(final_embeddings[target_section].shape[0]),
             "modalities_used": list(prior.get("modalities_used", [])),
-            "has_dense_P": prior.get("P_dense") is not None,
             "run_mode": run_mode,
             "note": "Saved sparse top-k UOT prior from model.ot_prior after final evaluation. X_to_Y means source X receives information from target Y. Dense P was not saved.",
         }
@@ -649,345 +505,58 @@ def summarize_outputs(outputs: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_one_forward(
-    model: StageMultiModalModel,
-    feature_dict: Mapping[str, Mapping[str, torch.Tensor]],
-    spatial_loc_dict: Mapping[str, Any],
-    processed_data_dict: Any,
-    section_order: list[str],
-    epoch: int,
-    training_loss_only: bool = False,
-    decoder_chunk_size: int = 0,
-    ot_attention_source_chunk_size: int = 0,
-    cache_spatial_graphs: bool = False,
-    bidirectional_ot_attention: bool = False,
-    checkpoint_ot_attention: bool = False,
-    checkpoint_encoder_fusion: bool = False,
-    checkpoint_decoder_chunks: bool = False,
-    checkpoint_graph_encoder: bool = False,
-    memory_recorder=None,
+def build_model_config(args):
+    model_config = resolve_model_config(
+        input_config={
+            "training": {
+                "device": args.device, "epochs": int(args.epochs),
+                "lr": float(args.lr), "weight_decay": float(args.weight_decay),
+            },
+            "uot": {
+                "max_iter": int(args.uot_max_iter), "topk": int(args.attention_topk),
+                "epsilon_update": float(args.uot_epsilon),
+                "tau_a": float(args.uot_tau_a), "tau_b": float(args.uot_tau_b),
+                "update_interval": int(args.update_interval),
+            },
+            "graph": {"knn_neighbors_spatial": int(args.spatial_knn_k)},
+            "graphsage": {
+                "edge_batch_size": int(args.graphsage_edge_batch_size),
+                "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
+            },
+        },
+        explicit_overrides={"loss": {"lambda_contrast": (
+            float(args.lambda_contrast) if args.lambda_contrast is not None else None
+        )}},
+    )
+    return model_config
+
+
+def resolve_run_config(args, *, samples=None, dataset_name="CRC Stereo-CITE-seq"):
+    samples = SAMPLES if samples is None else samples
+    return describe_run_config(
+        args, build_model_config(args), dataset=dataset_name,
+        section_order=list(samples), modalities=["RNA", "Protein"],
+        preprocessing={
+            "n_comps": args.n_comps,
+            "hvg_num": args.hvg_num,
+            "hvg_num_by_modality": {"RNA": args.hvg_num, "Protein": None},
+            "target_sum": None,
+            "use_harmony": not args.no_harmony,
+        },
+    )
+
+
+def run_crc_pipeline(
+    args, *, samples=None, read_pair=None, prepare_rna=None,
+    filter_shared_genes=None, status_prefix="CRC_STEREOCITE", run_config=None,
 ) -> dict[str, Any]:
-    return model(
-        feature_dict=feature_dict,
-        spatial_loc_dict=spatial_loc_dict,
-        processed_data_dict=processed_data_dict,
-        section_order=section_order,
-        epoch=epoch,
-        training_loss_only=training_loss_only,
-        decoder_chunk_size=decoder_chunk_size,
-        ot_attention_source_chunk_size=ot_attention_source_chunk_size,
-        cache_spatial_graphs=cache_spatial_graphs,
-        bidirectional_ot_attention=bidirectional_ot_attention,
-        checkpoint_ot_attention=checkpoint_ot_attention,
-        checkpoint_encoder_fusion=checkpoint_encoder_fusion,
-        checkpoint_decoder_chunks=checkpoint_decoder_chunks,
-        checkpoint_graph_encoder=checkpoint_graph_encoder,
-        memory_recorder=memory_recorder,
-    )
-
-
-def sparse_prior_kwargs(args) -> dict[str, Any]:
-    return {
-        "candidate_k": int(args.candidate_k),
-        "attention_topk": int(args.attention_topk),
-        "candidate_backend": args.candidate_backend,
-        "faiss_nlist": int(args.faiss_nlist),
-        "faiss_nprobe": int(args.faiss_nprobe),
-        "faiss_device": args.faiss_device,
-        "faiss_train_sample_size": int(args.faiss_train_sample_size),
-        "faiss_query_batch_size": (
-            int(args.faiss_query_batch_size)
-            if args.faiss_query_batch_size is not None
-            else None
-        ),
-        "seed": int(args.seed),
-        "epsilon": float(args.uot_epsilon),
-        "tau_a": float(args.uot_tau_a),
-        "tau_b": float(args.uot_tau_b),
-        "max_iter": int(args.uot_max_iter),
-        "stabilizer": float(args.uot_stabilizer),
-    }
-
-
-def initialize_model_ot_prior(
-    model: StageMultiModalModel,
-    feature_dict: Mapping[str, Mapping[str, torch.Tensor]],
-    section_order: list[str],
-    args,
-):
-    if args.ot_prior_mode == "dense":
-        return model.initialize_ot_prior(feature_dict, section_order=section_order)
-    if args.ot_prior_mode == "candidate_sparse":
-        kwargs = sparse_prior_kwargs(args)
-        return model.initialize_candidate_sparse_ot_prior(
-            feature_dict,
-            section_order=section_order,
-            initial_modality_candidate_k=int(args.initial_modality_candidate_k),
-            bidirectional=bool(args.bidirectional_ot_attention),
-            **kwargs,
-        )
-    raise ValueError(f"Unsupported ot_prior_mode: {args.ot_prior_mode}")
-
-
-def update_model_ot_prior(
-    model: StageMultiModalModel,
-    eval_outputs: Mapping[str, Any],
-    section_order: list[str],
-    args,
-):
-    # Dense refresh also uses the post-attention, pre-decoder-GraphSAGE
-    # embedding so decoder-side spatial smoothing never feeds back into OT.
-    refresh_source = (
-        "ot" if args.ot_prior_mode == "dense" else str(args.dynamic_candidate_source)
-    )
-    embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
-        eval_outputs,
-        refresh_source=refresh_source,
-    )
-    uot_cfg = model.config["uot"]
-    topology_weight = (
-        float(uot_cfg.get("topology_context_weight", 0.0))
-        if bool(uot_cfg.get("topology_aware_refresh_enabled", False))
-        else 0.0
-    )
-    if args.ot_prior_mode == "dense":
-        return model.update_ot_prior(
-            embeddings,
-            section_order=section_order,
-            context_embedding_dict=context_embeddings,
-            topology_context_weight=topology_weight,
-            embedding_source=refresh_source,
-        )
-    if args.ot_prior_mode == "candidate_sparse":
-        return model.update_candidate_sparse_ot_prior(
-            embeddings,
-            section_order=section_order,
-            candidate_source=refresh_source,
-            bidirectional=bool(args.bidirectional_ot_attention),
-            context_embedding_dict=context_embeddings,
-            topology_context_weight=topology_weight,
-            **sparse_prior_kwargs(args),
-        )
-    raise ValueError(f"Unsupported ot_prior_mode: {args.ot_prior_mode}")
-
-
-def train_small_crc_model(
-    model: StageMultiModalModel,
-    feature_dict: Mapping[str, Mapping[str, torch.Tensor]],
-    spatial_loc_dict: Mapping[str, Any],
-    processed_data_dict: Any,
-    section_order: list[str],
-    args,
-    memory_monitor: CudaMemoryMonitor | None = None,
-) -> tuple[list[dict[str, float]], dict[str, Any], list[int]]:
-    epochs = int(args.epochs)
-    if epochs <= 0:
-        raise ValueError("--epochs must be positive when --train is set.")
-
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=float(args.lr),
-        weight_decay=float(args.weight_decay),
-    )
-    scaler = make_grad_scaler(args)
-    history: list[dict[str, float]] = []
-    ot_updates: list[int] = []
-    for epoch in range(1, epochs + 1):
-        start_time = time.time()
-        model.train()
-        if memory_monitor is not None:
-            memory_monitor.record("epoch_start", epoch=epoch)
-            memory_monitor.reset_peak()
-            memory_monitor.record("epoch_forward_start", epoch=epoch)
-        with autocast_context(args):
-            outputs = run_one_forward(
-                model,
-                feature_dict,
-                spatial_loc_dict,
-                processed_data_dict,
-                section_order,
-                epoch=epoch,
-                training_loss_only=bool(args.training_loss_only),
-                decoder_chunk_size=int(args.decoder_chunk_size),
-                ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
-                cache_spatial_graphs=bool(args.cache_spatial_graphs),
-                bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
-                checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
-                checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
-                checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
-                checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
-                memory_recorder=make_forward_memory_recorder(
-                    memory_monitor,
-                    bool(args.log_cuda_memory_detail),
-                    epoch,
-                    "train_forward",
-                ),
-            )
-        forward_memory = (
-            memory_monitor.record("epoch_forward_end", epoch=epoch)
-            if memory_monitor is not None
-            else {}
-        )
-        loss = outputs["losses"]["total_loss"].float()
-        optimizer.zero_grad(set_to_none=True)
-        if memory_monitor is not None:
-            memory_monitor.reset_peak()
-            memory_monitor.record("epoch_backward_start", epoch=epoch)
-        if scaler.is_enabled():
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
-        backward_memory = (
-            memory_monitor.record("epoch_backward_end", epoch=epoch)
-            if memory_monitor is not None
-            else {}
-        )
-        if memory_monitor is not None:
-            memory_monitor.reset_peak()
-            memory_monitor.record("epoch_optimizer_step_start", epoch=epoch)
-        if scaler.is_enabled():
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        optimizer_memory = (
-            memory_monitor.record("epoch_optimizer_step_end", epoch=epoch)
-            if memory_monitor is not None
-            else {}
-        )
-
-        total_loss_value = float(loss.detach().cpu().item())
-        crossview_loss_value = float(outputs["losses"]["crossview_loss"].detach().cpu().item())
-        reconstruction_loss_value = float(outputs["losses"]["reconstruction_loss"].detach().cpu().item())
-        record = {
-            "epoch": int(epoch),
-            "lambda_contrast": float(model.config["loss"]["lambda_contrast"]),
-            "total_loss": total_loss_value,
-            "crossview_loss": crossview_loss_value,
-            "reconstruction_loss": reconstruction_loss_value,
-            "elapsed_time_sec": float(time.time() - start_time),
-        }
-        record["weighted_crossview_loss"] = record["lambda_contrast"] * record["crossview_loss"]
-        if memory_monitor is not None:
-            stage_events = [forward_memory, backward_memory, optimizer_memory]
-            record.update(
-                {
-                    "cuda_allocated_gib": optimizer_memory.get("allocated_gib"),
-                    "cuda_reserved_gib": optimizer_memory.get("reserved_gib"),
-                    "cuda_epoch_max_allocated_gib": max(
-                        (
-                            event.get("max_allocated_gib", 0.0) or 0.0
-                            for event in stage_events
-                        ),
-                        default=0.0,
-                    ),
-                    "cuda_epoch_max_reserved_gib": max(
-                        (
-                            event.get("max_reserved_gib", 0.0) or 0.0
-                            for event in stage_events
-                        ),
-                        default=0.0,
-                    ),
-                    "cuda_forward_max_allocated_gib": forward_memory.get("max_allocated_gib"),
-                    "cuda_backward_max_allocated_gib": backward_memory.get("max_allocated_gib"),
-                    "cuda_optimizer_max_allocated_gib": optimizer_memory.get("max_allocated_gib"),
-                }
-            )
-        history.append(record)
-
-        if args.log_every > 0 and (epoch == 1 or epoch % int(args.log_every) == 0 or epoch == epochs):
-            print(
-                f"epoch={epoch} total={record['total_loss']:.6f} "
-                f"lambda_contrast={record['lambda_contrast']:.6g} "
-                f"weighted_crossview={record['weighted_crossview_loss']:.6f} "
-                f"crossview={record['crossview_loss']:.6f} "
-                f"reconstruction={record['reconstruction_loss']:.6f}"
-            )
-
-        if memory_monitor is not None:
-            memory_monitor.record("epoch_cleanup_start", epoch=epoch)
-        del outputs
-        del loss
-        release_python_and_cuda_cache()
-        if memory_monitor is not None:
-            memory_monitor.record("epoch_cleanup_end", epoch=epoch)
-
-        if should_update_ot(epoch, int(args.update_interval)):
-            model.eval()
-            with torch.no_grad():
-                if memory_monitor is not None:
-                    memory_monitor.reset_peak()
-                    memory_monitor.record("ot_update_forward_start", epoch=epoch)
-                eval_outputs = run_one_forward(
-                    model,
-                    feature_dict,
-                    spatial_loc_dict,
-                    processed_data_dict,
-                    section_order,
-                    epoch=epoch,
-                    decoder_chunk_size=int(args.decoder_chunk_size),
-                    ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
-                    cache_spatial_graphs=bool(args.cache_spatial_graphs),
-                    bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
-                    checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
-                    checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
-                    checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
-                    checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
-                    memory_recorder=make_forward_memory_recorder(
-                        memory_monitor,
-                        bool(args.log_cuda_memory_detail),
-                        epoch,
-                        "ot_update_forward",
-                    ),
-                )
-                if memory_monitor is not None:
-                    memory_monitor.record("ot_update_forward_end", epoch=epoch)
-                    memory_monitor.reset_peak()
-                    memory_monitor.record("ot_update_prior_start", epoch=epoch)
-                update_model_ot_prior(model, eval_outputs, section_order, args)
-                if memory_monitor is not None:
-                    memory_monitor.record("ot_update_prior_end", epoch=epoch)
-                del eval_outputs
-                release_python_and_cuda_cache()
-                if memory_monitor is not None:
-                    memory_monitor.record("ot_update_cleanup_end", epoch=epoch)
-            ot_updates.append(epoch)
-            print(f"Updated OT prior at epoch {epoch}.")
-
-    model.eval()
-    with torch.no_grad():
-        if memory_monitor is not None:
-            memory_monitor.reset_peak()
-            memory_monitor.record("final_eval_start", epoch=epochs)
-        final_outputs = run_one_forward(
-            model,
-            feature_dict,
-            spatial_loc_dict,
-            processed_data_dict,
-            section_order,
-            epoch=epochs,
-            decoder_chunk_size=int(args.decoder_chunk_size),
-            ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
-            cache_spatial_graphs=bool(args.cache_spatial_graphs),
-            bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
-            checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
-            checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
-            checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
-            checkpoint_graph_encoder=bool(args.checkpoint_graph_encoder),
-            memory_recorder=make_forward_memory_recorder(
-                memory_monitor,
-                bool(args.log_cuda_memory_detail),
-                epochs,
-                "final_eval_forward",
-            ),
-        )
-        if memory_monitor is not None:
-            memory_monitor.record("final_eval_end", epoch=epochs)
-    return history, final_outputs, ot_updates
-
-
-def run_crc_pipeline(args) -> dict[str, Any]:
+    samples = SAMPLES if samples is None else samples
+    first_section, second_section = samples
+    if run_config is None:
+        run_config = resolve_run_config(args, samples=samples)
+    section_key_map = {"s1": first_section, "s2": second_section}
+    read_pair = read_backed_pair if read_pair is None else read_pair
+    prepare_rna = prepare_rna_var_names_make_unique if prepare_rna is None else prepare_rna
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("--device cuda was requested, but torch.cuda.is_available() is False.")
     if args.max_spots_per_section is not None and args.max_spots_per_section <= 0:
@@ -1039,18 +608,20 @@ def run_crc_pipeline(args) -> dict[str, Any]:
     alignment_summary: dict[str, dict[str, Any]] = {}
 
     try:
-        for section, sample_dir in SAMPLES.items():
-            rna, adt = read_backed_pair(data_dir, sample_dir)
+        for section, sample_dir in samples.items():
+            rna, adt = read_pair(data_dir, sample_dir)
             backed_rna[section] = rna
             backed_adt[section] = adt
-            rna_info[section], duplicate_tables[section] = prepare_rna_var_names_make_unique(rna)
+            rna_info[section], duplicate_tables[section] = prepare_rna(rna)
             alignment_summary[section] = validate_rna_adt_alignment(section, rna, adt)
         memory_monitor.record("read_raw_h5ad_make_unique_validate_alignment")
 
-        rna003 = backed_rna["CRC_003"]
-        rna006 = backed_rna["CRC_006"]
+        rna003 = backed_rna[first_section]
+        rna006 = backed_rna[second_section]
         shared_set_006 = set(rna006.var_names.astype(str))
         shared_genes_all = [gene for gene in rna003.var_names.astype(str) if gene in shared_set_006]
+        if filter_shared_genes is not None:
+            shared_genes_all = filter_shared_genes(rna003, rna006, shared_genes_all)
         if not shared_genes_all:
             raise ValueError("No shared RNA genes found after var_names_make_unique().")
         selected_shared_genes = (
@@ -1081,16 +652,16 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             },
         )
 
-        adt_markers_003 = list(map(str, backed_adt["CRC_003"].var_names))
-        adt_markers_006 = list(map(str, backed_adt["CRC_006"].var_names))
+        adt_markers_003 = list(map(str, backed_adt[first_section].var_names))
+        adt_markers_006 = list(map(str, backed_adt[second_section].var_names))
         adt_marker_set_same = set(adt_markers_003) == set(adt_markers_006)
         adt_marker_order_same = adt_markers_003 == adt_markers_006
-        if not backed_adt["CRC_003"].var_names.is_unique or not backed_adt["CRC_006"].var_names.is_unique:
+        if not backed_adt[first_section].var_names.is_unique or not backed_adt[second_section].var_names.is_unique:
             raise ValueError("ADT marker var_names must be unique.")
         if not adt_marker_set_same:
-            raise ValueError("CRC_003 and CRC_006 ADT marker sets differ.")
+            raise ValueError(f"{first_section} and {second_section} ADT marker sets differ.")
         if not adt_marker_order_same:
-            raise ValueError("CRC_003 and CRC_006 ADT marker order differs.")
+            raise ValueError(f"{first_section} and {second_section} ADT marker order differs.")
 
         for section, table in duplicate_tables.items():
             table.to_csv(output_dir / f"duplicate_gene_summary_{section}.csv", index=False)
@@ -1105,7 +676,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 args.spot_sampling,
                 rng,
             )
-            for section in SAMPLES
+            for section in samples
         }
         selected_obs_names_preview = {
             section: list(backed_rna[section].obs_names[indices][:10])
@@ -1126,17 +697,17 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             },
         )
 
-        rna003_mem = subset_to_memory(backed_rna["CRC_003"], obs_indices["CRC_003"], selected_shared_genes)
-        rna006_mem = subset_to_memory(backed_rna["CRC_006"], obs_indices["CRC_006"], selected_shared_genes)
-        adt003_mem = subset_to_memory(backed_adt["CRC_003"], obs_indices["CRC_003"], None)
-        adt006_mem = subset_to_memory(backed_adt["CRC_006"], obs_indices["CRC_006"], None)
+        rna003_mem = subset_to_memory(backed_rna[first_section], obs_indices[first_section], selected_shared_genes)
+        rna006_mem = subset_to_memory(backed_rna[second_section], obs_indices[second_section], selected_shared_genes)
+        adt003_mem = subset_to_memory(backed_adt[first_section], obs_indices[first_section], None)
+        adt006_mem = subset_to_memory(backed_adt[second_section], obs_indices[second_section], None)
         memory_monitor.record(
             "loaded_selected_anndata_to_memory",
             extra={
-                "rna_CRC_003_shape": list(rna003_mem.shape),
-                "rna_CRC_006_shape": list(rna006_mem.shape),
-                "adt_CRC_003_shape": list(adt003_mem.shape),
-                "adt_CRC_006_shape": list(adt006_mem.shape),
+                f"rna_{first_section}_shape": list(rna003_mem.shape),
+                f"rna_{second_section}_shape": list(rna006_mem.shape),
+                f"adt_{first_section}_shape": list(adt003_mem.shape),
+                f"adt_{second_section}_shape": list(adt006_mem.shape),
             },
         )
 
@@ -1157,17 +728,12 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         memory_monitor.record("cosie_preprocessing_start")
         feature_dict_raw, spatial_loc_dict_raw, processed_data_dict = load_cosie_style_data(
             data_dict,
-            n_comps=args.n_comps,
-            hvg_num=args.hvg_num,
-            hvg_num_by_modality={"RNA": args.hvg_num, "Protein": None},
-            target_sum=None,
-            use_harmony=not args.no_harmony,
-            metacell=False,
+            **run_config["preprocessing"],
         )
         preprocessing_generated_keys = list(feature_dict_raw.keys())
-        feature_dict = rename_section_keys(feature_dict_raw)
-        spatial_loc_dict = rename_section_keys(spatial_loc_dict_raw)
-        section_order = ["CRC_003", "CRC_006"]
+        feature_dict = rename_section_keys(feature_dict_raw, section_key_map)
+        spatial_loc_dict = rename_section_keys(spatial_loc_dict_raw, section_key_map)
+        section_order = [first_section, second_section]
         memory_monitor.record(
             "cosie_preprocessing_end",
             extra={
@@ -1176,34 +742,12 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             },
         )
 
-        model_config = get_default_model_config()
-        model_config["training"]["device"] = args.device
-        model_config["training"]["epochs"] = int(args.epochs)
-        model_config["training"]["lr"] = float(args.lr)
-        model_config["training"]["weight_decay"] = float(args.weight_decay)
-        model_config["ot_attention"]["context_gate_enabled"] = not bool(
-            args.disable_context_attention_gate
-        )
-        if args.lambda_contrast is not None:
-            model_config["loss"]["lambda_contrast"] = float(args.lambda_contrast)
-        model_config["uot"]["max_iter"] = int(args.uot_max_iter)
-        model_config["uot"]["topk"] = int(args.attention_topk)
-        model_config["uot"]["epsilon_update"] = float(args.uot_epsilon)
-        model_config["uot"]["tau_a"] = float(args.uot_tau_a)
-        model_config["uot"]["tau_b"] = float(args.uot_tau_b)
-        model_config["uot"]["check_every"] = 10
-        model_config["uot"]["tol"] = 1e-5
-        model_config["uot"]["update_interval"] = int(args.update_interval)
-        model_config["graph"]["knn_neighbors_spatial"] = int(args.spatial_knn_k)
-        model_config["graphsage"]["edge_batch_size"] = int(args.graphsage_edge_batch_size)
-        model_config["graphsage"]["post_ot_graphsage_scale"] = float(
-            args.post_ot_graphsage_scale
-        )
+        model_config = run_config["model_config"]
         memory_monitor.reset_peak()
         memory_monitor.record("model_init_start")
         model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
         memory_monitor.record("model_init_end")
-        resolved_modality_order = list(model._resolve_modality_order(feature_dict["CRC_003"]))
+        resolved_modality_order = list(model._resolve_modality_order(feature_dict[first_section]))
         if resolved_modality_order != ["RNA", "Protein"]:
             raise ValueError(f"Expected ['RNA', 'Protein'], got {resolved_modality_order}.")
 
@@ -1211,16 +755,13 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         memory_monitor.record("initial_ot_prior_start")
         initialize_model_ot_prior(model, feature_dict, section_order, args)
         memory_monitor.record("initial_ot_prior_end")
-        initial_prior = model.ot_prior[("CRC_003", "CRC_006")]
-        if args.bidirectional_ot_attention and args.ot_prior_mode == "candidate_sparse":
-            expected_keys = {("CRC_003", "CRC_006"), ("CRC_006", "CRC_003")}
-            actual_keys = set((model.ot_prior or {}).keys())
-            if not expected_keys.issubset(actual_keys):
-                raise ValueError(f"Bidirectional OT prior is missing direction keys: {expected_keys - actual_keys}")
+        initial_prior = model.ot_prior[(first_section, second_section)]
+        expected_keys = {(first_section, second_section), (second_section, first_section)}
+        actual_keys = set((model.ot_prior or {}).keys())
+        if not expected_keys.issubset(actual_keys):
+            raise ValueError(f"Bidirectional OT prior is missing direction keys: {expected_keys - actual_keys}")
         initial_ot_modalities_used = list(initial_prior.get("modalities_used", []))
-        if args.ot_prior_mode == "dense" and initial_ot_modalities_used != ["RNA", "Protein"]:
-            raise ValueError(f"Unexpected initial OT modalities_used: {initial_ot_modalities_used}")
-        if args.ot_prior_mode == "candidate_sparse" and initial_prior.get("metadata", {}).get("ot_prior_mode") != "candidate_sparse":
+        if initial_prior.get("metadata", {}).get("ot_prior_mode") != "candidate_sparse":
             raise ValueError("Expected candidate_sparse initial OT prior metadata.")
         history: list[dict[str, float]] | None = None
         ot_updates: list[int] = []
@@ -1248,7 +789,6 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                     decoder_chunk_size=int(args.decoder_chunk_size),
                     ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
-                    bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                     checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
                     checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
                     checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
@@ -1262,34 +802,32 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 )
                 memory_monitor.record("dry_run_forward_end", epoch=0)
 
-        prior = outputs["ot_prior"][("CRC_003", "CRC_006")]
+        prior = outputs["ot_prior"][(first_section, second_section)]
         reconstruction_keys = {
             section: sorted(modalities.keys())
             for section, modalities in outputs["reconstructions"].items()
         }
         ot_modalities_used = list(prior.get("modalities_used", []))
         total_loss_finite = bool(torch.isfinite(outputs["losses"]["total_loss"]).item())
-        if reconstruction_keys != {"CRC_003": ["Protein", "RNA"], "CRC_006": ["Protein", "RNA"]}:
+        if reconstruction_keys != {first_section: ["Protein", "RNA"], second_section: ["Protein", "RNA"]}:
             raise ValueError(f"Unexpected reconstruction keys: {reconstruction_keys}")
         # Initial UOT remains multimodal RNA/Protein. Dynamic refresh preserves
         # the original detached final-embedding source by default.
         accepted_ot_modalities = [["RNA", "Protein"]]
         if args.train and ot_updates:
             accepted_ot_modalities.append(["final_embedding"])
-            accepted_ot_modalities.append([f"{args.dynamic_candidate_source}_embedding"])
-        if args.ot_prior_mode == "candidate_sparse":
-            accepted_ot_modalities.append(["RNA", "Protein"])
-            accepted_ot_modalities.append([f"{args.dynamic_candidate_source}_embedding"])
+            accepted_ot_modalities.append(["ot_embedding"])
+        accepted_ot_modalities.append(["RNA", "Protein"])
+        accepted_ot_modalities.append(["ot_embedding"])
         if ot_modalities_used not in accepted_ot_modalities:
             raise ValueError(f"Unexpected OT modalities_used: {ot_modalities_used}")
-        if args.bidirectional_ot_attention and args.ot_prior_mode == "candidate_sparse":
-            reverse_prior = outputs["ot_prior"].get(("CRC_006", "CRC_003"))
-            if reverse_prior is None:
-                raise ValueError("Bidirectional OT prior is missing CRC_006<-CRC_003 direction.")
-            if int(prior["topk_idx"].max().item()) >= int(feature_dict["CRC_006"]["RNA"].shape[0]):
-                raise ValueError("CRC_003<-CRC_006 topk_idx contains out-of-range target indices.")
-            if int(reverse_prior["topk_idx"].max().item()) >= int(feature_dict["CRC_003"]["RNA"].shape[0]):
-                raise ValueError("CRC_006<-CRC_003 topk_idx contains out-of-range target indices.")
+        reverse_prior = outputs["ot_prior"].get((second_section, first_section))
+        if reverse_prior is None:
+            raise ValueError(f"Bidirectional OT prior is missing {second_section}<-{first_section} direction.")
+        if int(prior["topk_idx"].max().item()) >= int(feature_dict[second_section]["RNA"].shape[0]):
+            raise ValueError(f"{first_section}<-{second_section} topk_idx contains out-of-range target indices.")
+        if int(reverse_prior["topk_idx"].max().item()) >= int(feature_dict[first_section]["RNA"].shape[0]):
+            raise ValueError(f"{second_section}<-{first_section} topk_idx contains out-of-range target indices.")
         if not total_loss_finite:
             raise ValueError("total_loss is not finite.")
 
@@ -1329,12 +867,13 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             }
 
         summary = {
+            "resolved_config": run_config,
             "mode": "train" if args.train else "dry_run",
             "input_data_path": str(data_dir),
             "output_dir": str(output_dir),
             "section_names": section_order,
             "preprocessing_generated_keys": preprocessing_generated_keys,
-            "section_key_mapping": AUTO_SECTION_KEY_MAP,
+            "section_key_mapping": section_key_map,
             "seed": int(args.seed),
             "n_comps": int(args.n_comps),
             "hvg_num": int(args.hvg_num),
@@ -1349,8 +888,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "update_interval": int(args.update_interval),
             "ot_updates": ot_updates,
             "uot_max_iter": int(args.uot_max_iter),
-            "ot_prior_mode": args.ot_prior_mode,
-            "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
+            "ot_prior_mode": "candidate_sparse",
+            "bidirectional_ot_attention": True,
             "candidate_backend": args.candidate_backend,
             "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
             "candidate_k": int(args.candidate_k),
@@ -1364,13 +903,12 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 if args.faiss_query_batch_size is not None
                 else None
             ),
-            "dynamic_candidate_source": args.dynamic_candidate_source,
+            "dynamic_candidate_source": "ot",
             "architecture": (
                 "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder"
             ),
             "pre_post_graphsage_parameter_sharing": False,
             "ot_refresh_embedding_key": "ot_embeddings",
-            "attention_context_gate_enabled": not args.disable_context_attention_gate,
             "uot_epsilon": float(args.uot_epsilon),
             "uot_tau_a": float(args.uot_tau_a),
             "uot_tau_b": float(args.uot_tau_b),
@@ -1411,8 +949,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "max_shared_genes": int(args.max_shared_genes) if args.max_shared_genes is not None else None,
             "protein_marker_count": int(len(adt_markers_003)),
             "adt_var_names_unique": {
-                "CRC_003": bool(backed_adt["CRC_003"].var_names.is_unique),
-                "CRC_006": bool(backed_adt["CRC_006"].var_names.is_unique),
+                first_section: bool(backed_adt[first_section].var_names.is_unique),
+                second_section: bool(backed_adt[second_section].var_names.is_unique),
             },
             "adt_marker_set_same": bool(adt_marker_set_same),
             "adt_marker_order_same": bool(adt_marker_order_same),
@@ -1435,10 +973,10 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             "reconstruction_keys": reconstruction_keys,
             "ot_prior_keys": [list(key) for key in outputs["ot_prior"].keys()],
             "initial_ot_prior_modalities_used": {
-                "CRC_003_to_CRC_006": initial_ot_modalities_used,
+                f"{first_section}_to_{second_section}": initial_ot_modalities_used,
             },
             "ot_prior_modalities_used": {
-                "CRC_003_to_CRC_006": ot_modalities_used,
+                f"{first_section}_to_{second_section}": ot_modalities_used,
             },
             "losses": {
                 key: float(value.detach().cpu())
@@ -1457,8 +995,8 @@ def run_crc_pipeline(args) -> dict[str, Any]:
                 "loss_history": str(output_dir / "loss_history.json") if history is not None else None,
                 "shared_gene_symbols_make_unique": str(output_dir / "shared_gene_symbols_make_unique.txt"),
                 "adt_marker_list": str(output_dir / "adt_marker_list.txt"),
-                "duplicate_gene_summary_CRC_003": str(output_dir / "duplicate_gene_summary_CRC_003.csv"),
-                "duplicate_gene_summary_CRC_006": str(output_dir / "duplicate_gene_summary_CRC_006.csv"),
+                f"duplicate_gene_summary_{first_section}": str(output_dir / f"duplicate_gene_summary_{first_section}.csv"),
+                f"duplicate_gene_summary_{second_section}": str(output_dir / f"duplicate_gene_summary_{second_section}.csv"),
                 "selected_spot_indices": saved_selected_spot_indices,
                 "spatial": spatial_paths,
                 "final_embeddings": embedding_paths,
@@ -1477,7 +1015,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
             },
             "notes": [
                 "Suffixes such as MATR3-1 and ABCF2-1 are engineering names generated by AnnData var_names_make_unique(); they are not biological gene IDs.",
-                "selected shared genes follow CRC_003 make_unique order.",
+                f"selected shared genes follow {first_section} make_unique order.",
                 "max_shared_genes limits the dry-run gene list for speed and should be revisited for formal experiments.",
             ],
         }
@@ -1492,7 +1030,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
         memory_monitor.record("write_run_summary_end")
 
         print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
-        print("CRC_STEREOCITE_TRAIN: PASS" if args.train else "CRC_STEREOCITE_DRY_RUN: PASS")
+        print(f"{status_prefix}_TRAIN: PASS" if args.train else f"{status_prefix}_DRY_RUN: PASS")
         return summary
     finally:
         for adata_obj in list(backed_rna.values()) + list(backed_adt.values()):
@@ -1502,7 +1040,7 @@ def run_crc_pipeline(args) -> dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
-    run_crc_pipeline(args)
+    run_crc_pipeline(args, run_config=resolve_run_config(args))
 
 
 if __name__ == "__main__":

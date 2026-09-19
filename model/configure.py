@@ -8,7 +8,6 @@ PROJECT_ROOT = "/home/hujinlan/spa_mo_model"
 MODEL_DIR = "/home/hujinlan/spa_mo_model/model"
 DATA_DIR = "/home/hujinlan/spa_mo_model/data"
 UNI_DIR = "/home/hujinlan/spa_mo_model/UNI"
-UNI_CHECKPOINT = "/home/hujinlan/spa_mo_model/UNI/pytorch_model.bin"
 
 # only for provenance/debug, not required at runtime
 REFERENCE_COSIE_ROOT = "/home/hujinlan/cosie"
@@ -38,6 +37,48 @@ MODALITY_ALIASES = {
 }
 
 
+def reject_unsupported_model_config(config):
+    """Reject known retired or ineffective model fields, not dataset metadata."""
+    unsupported = {
+        "graph": {"use_spatial_graph", "use_feature_graph"},
+        "encoder": {"type", "residual"},
+        "contrastive": {
+            "method", "loss_weight", "pairwise_all_observed_modalities",
+            "use_infonce", "use_temperature", "use_spot_positive_negative_pairs",
+        },
+        "fusion": {"mode", "input_dim"},
+        "graphsage": {"num_layers", "use_distance_weight"},
+        "uot": {
+            "initial_from_modalities", "use_momentum", "momentum",
+            "normalize_total_mass", "cost", "tol", "check_every",
+            "clip_cost_min", "clip_cost_max", "keep_dense",
+        },
+        "ot_attention": {"direction"},
+        "reconstruction": {"loss"},
+        "loss": {"use_ot_loss", "use_spatial_smooth_loss", "use_gate_regularization"},
+    }
+    fields = [
+        f"{section}.{key}"
+        for section, keys in unsupported.items()
+        for key in sorted(keys.intersection(config.get(section, {})))
+    ]
+    fields.extend(sorted({
+        "ot_prior_mode", "bidirectional_ot_attention", "dynamic_candidate_source", "metacell",
+    }.intersection(config)))
+    if fields:
+        raise ValueError(f"Unsupported model configuration fields (retired or without a consumer): {fields}")
+
+
+def reject_unsupported_preprocess_config(config):
+    """Reject ineffective preprocessing knobs while retaining input identity."""
+    unsupported = {"rna_var_names_source", "superpixel_size", "patch_size", "uni_checkpoint"}
+    fields = sorted(unsupported.intersection(config))
+    for section in ("preprocessing", "he_image", "paths"):
+        fields.extend(f"{section}.{key}" for key in sorted(unsupported.intersection(config.get(section, {}))))
+    if fields:
+        raise ValueError(f"Unsupported preprocessing configuration fields (without a consumer): {fields}")
+
+
 def get_default_preprocess_config():
     """Return the default COSIE-style preprocessing configuration."""
 
@@ -47,7 +88,6 @@ def get_default_preprocess_config():
             "model_dir": MODEL_DIR,
             "data_dir": DATA_DIR,
             "uni_dir": UNI_DIR,
-            "uni_checkpoint": UNI_CHECKPOINT,
             "reference_cosie_root": REFERENCE_COSIE_ROOT,
         },
         "modalities": {
@@ -61,14 +101,10 @@ def get_default_preprocess_config():
             "hvg_num_by_modality": None,
             "target_sum": DEFAULT_TARGET_SUM,
             "use_harmony": DEFAULT_USE_HARMONY,
-            "metacell": False,
             "spatial_key": DEFAULT_SPATIAL_KEY,
             "uni_feature_key": DEFAULT_UNI_FEATURE_KEY,
-            "rna_var_names_source": None,
         },
         "he_image": {
-            "superpixel_size": 16,
-            "patch_size": 224,
             "batch_size": 128,
             "num_workers": 4,
             "device": None,
@@ -110,32 +146,20 @@ def get_default_model_config():
             ],
         },
         "graph": {
-            "use_spatial_graph": True,
             "knn_neighbors_spatial": 5,
-            "use_feature_graph": False,
         },
         "encoder": {
-            "type": "mlp",
             "hidden_dims": [256, 128],
             "output_dim": 128,
             "activation": "GELU",
             "dropout": 0.1,
             "norm": "LayerNorm",
-            "residual": False,
             "l2_normalize_output": True,
         },
         "contrastive": {
-            "method": "cosie_crossview",
             "gamma": 5.0,
-            "loss_weight": 1.0,
-            "pairwise_all_observed_modalities": True,
-            "use_infonce": False,
-            "use_temperature": False,
-            "use_spot_positive_negative_pairs": False,
         },
         "fusion": {
-            "mode": "concat_mlp_projection",
-            "input_dim": 384,
             "hidden_dims": [256, 128],
             "output_dim": 128,
             "activation": "GELU",
@@ -153,10 +177,6 @@ def get_default_model_config():
             "enabled": True,
             "input_dim": 128,
             "output_dim": 128,
-            "num_layers": 1,
-            # G0-b: retain adjacency self-loops and the outer residual, but
-            # bypass the additional learned GraphSAGE self projection.
-            "self_path_mode": "no_self_linear",
             "dropout": 0.1,
             "activation": "GELU",
             "norm": "LayerNorm",
@@ -164,18 +184,14 @@ def get_default_model_config():
             # V6-compatible default. Versioned experiment configs override
             # only this post-OT GraphSAGE residual/neighbor branch scale.
             "post_ot_graphsage_scale": 1.0,
-            "use_distance_weight": True,
             "delta": 1e-8,
             "edge_batch_size": 200000,
         },
         "uot": {
             "enabled": True,
-            "initial_from_modalities": True,
             # Dynamic sparse OT refreshes from the OT-attention output before
             # the decoder-side GraphSAGE. This prevents post-OT spatial
             # smoothing from feeding back into subsequent OT matching.
-            "update_from_final_embedding": False,
-            "dynamic_refresh_source": "ot",
             "topology_aware_refresh_enabled": True,
             "topology_context_weight": 0.2,
             "epsilon_init": 0.08,
@@ -183,23 +199,12 @@ def get_default_model_config():
             "tau_a": 1.0,
             "tau_b": 1.0,
             "max_iter": 1000,
-            "tol": 1e-6,
-            "check_every": 10,
             "update_interval": 20,
             "topk": 10,
-            "use_momentum": False,
-            "momentum": 0.0,
-            "normalize_total_mass": True,
-            "cost": "cosine",
-            "clip_cost_min": 0.0,
-            "clip_cost_max": 2.0,
-            "keep_dense": False,
         },
         "ot_attention": {
             "enabled": True,
-            # V3 default: the scalar gate uses the original 4 * 128 features.
-            "context_gate_enabled": False,
-            "direction": "forward",
+            # The scalar gate uses source/message features (4 * 128).
             "d_attn": 128,
             "beta": 0.2,
             "beta_warmup": False,
@@ -214,8 +219,6 @@ def get_default_model_config():
             "residual": True,
             "norm": "LayerNorm",
             "delta": 1e-8,
-            "context_eps": 1e-8,
-            "context_consistency_backprop_to_alpha": False,
         },
         "decoder": {
             "enabled": True,
@@ -225,7 +228,6 @@ def get_default_model_config():
         },
         "reconstruction": {
             "enabled": True,
-            "loss": "mse",
             "lambda_by_modality": {
                 "HE": 1.0,
                 "RNA": 1.0,
@@ -236,8 +238,5 @@ def get_default_model_config():
         "loss": {
             "lambda_contrast": 0.1,
             "lambda_reconstruction": 1.0,
-            "use_ot_loss": False,
-            "use_spatial_smooth_loss": False,
-            "use_gate_regularization": False,
         },
     }

@@ -12,7 +12,17 @@ import numpy as np
 import pandas as pd
 
 
-ORIGINAL = Path(__file__).with_name("run_misar_seq.py")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts import run_misar_seq as misar
+from data_io.adapted import (
+    simulation_spatial_domain as _spatial_domain,
+    adapt_simulation_pair as _adapt_pair, read_simulation_pair as read_pair,
+)
+
+
 DATA_DIR = Path("/home/hujinlan/spa_mo_model/data/Simulation")
 OUTPUT_DIR = Path(
     "/home/hujinlan/spa_mo_model/result_v4/simulation/"
@@ -21,84 +31,14 @@ OUTPUT_DIR = Path(
 SECTIONS = [f"Simulation{i}" for i in range(1, 6)]
 
 
-def _spatial_domain(spfac: np.ndarray) -> np.ndarray:
-    active = np.asarray(spfac).sum(axis=1) > 0
-    labels = np.full(len(spfac), "background", dtype=object)
-    labels[active] = np.asarray(
-        [f"sp{i + 1}" for i in np.asarray(spfac)[active].argmax(axis=1)]
-    )
-    return labels
-
-
-def _adapt_pair(
-    section: str, rna: ad.AnnData, adt: ad.AnnData
-) -> tuple[ad.AnnData, ad.AnnData]:
-    if list(rna.obs_names.astype(str)) != list(adt.obs_names.astype(str)):
-        raise ValueError(f"{section}: RNA and ADT spot order differs.")
-    if rna.shape != (1296, 1000) or adt.shape != (1296, 100):
-        raise ValueError(f"{section}: unexpected RNA/ADT shapes {rna.shape}/{adt.shape}.")
-    for name, obj in (("RNA", rna), ("ADT", adt)):
-        values = np.asarray(obj.X)
-        if not np.isfinite(values).all() or values.min() < 0:
-            raise ValueError(f"{section} {name}: X must be finite and nonnegative.")
-        if not np.allclose(values, np.rint(values)):
-            raise ValueError(f"{section} {name}: X must contain integer-valued observations.")
-    coords = np.asarray(rna.obsm["spatial"], dtype=np.float32)
-    if coords.shape != (rna.n_obs, 2) or not np.isfinite(coords).all():
-        raise ValueError(f"{section}: invalid RNA obsm['spatial'].")
-    if not np.array_equal(coords, np.asarray(adt.obsm["spatial"])):
-        raise ValueError(f"{section}: RNA and ADT spatial coordinates differ.")
-    spfac = np.asarray(rna.obsm["spfac"], dtype=np.float32)
-    if spfac.shape != (rna.n_obs, 4):
-        raise ValueError(f"{section}: expected four spatial factors.")
-    rna_ns = np.asarray(rna.obsm["nsfac"], dtype=np.float32)
-    adt_ns = np.asarray(adt.obsm["nsfac"], dtype=np.float32)
-    for obj in (rna, adt):
-        obj.obsm["spatial"] = coords.copy()
-        obj.obs["x"] = coords[:, 0]
-        obj.obs["y"] = coords[:, 1]
-        obj.obs["spatial_domain"] = _spatial_domain(spfac)
-        obj.obs["original_barcode"] = obj.obs_names.astype(str)
-        for i in range(4):
-            obj.obs[f"spfac_{i + 1}"] = spfac[:, i]
-    for i in range(3):
-        rna.obs[f"rna_nsfac_{i + 1}"] = rna_ns[:, i]
-        rna.obs[f"adt_nsfac_{i + 1}"] = adt_ns[:, i]
-        adt.obs[f"rna_nsfac_{i + 1}"] = rna_ns[:, i]
-        adt.obs[f"adt_nsfac_{i + 1}"] = adt_ns[:, i]
-    return rna, adt
-
-
-def _load_pipeline() -> dict:
-    source = ORIGINAL.read_text(encoding="utf-8")
-    source = source.replace("MISAR-seq", "Simulation")
-    source = source.replace("ATAC", "Protein").replace("atac", "adt")
-    namespace = {"__file__": str(ORIGINAL), "__name__": "simulation_spa_mo_pipeline"}
-    exec(compile(source, str(ORIGINAL), "exec"), namespace)
-    namespace["SECTION_INFO"] = {
-        section: {"dir": section, "sample": section, "stage": section}
-        for section in SECTIONS
-    }
-    namespace["DEFAULT_SECTION_ORDER"] = list(SECTIONS)
-
-    def read_pair(data_dir: Path, section: str):
-        folder = data_dir / section
-        rna = ad.read_h5ad(folder / "adata_RNA.h5ad")
-        adt = ad.read_h5ad(folder / "adata_ADT.h5ad")
-        return _adapt_pair(section, rna, adt)
-
-    namespace["read_backed_pair"] = read_pair
-    return namespace
-
-
-def _write_adapter_audit() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _write_adapter_audit(data_dir: Path, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
     common_rna: set[str] | None = None
     common_adt: set[str] | None = None
     for section in SECTIONS:
-        rna = ad.read_h5ad(DATA_DIR / section / "adata_RNA.h5ad")
-        adt = ad.read_h5ad(DATA_DIR / section / "adata_ADT.h5ad")
+        rna = ad.read_h5ad(data_dir / section / "adata_RNA.h5ad")
+        adt = ad.read_h5ad(data_dir / section / "adata_ADT.h5ad")
         _adapt_pair(section, rna, adt)
         genes, proteins = set(rna.var_names.astype(str)), set(adt.var_names.astype(str))
         common_rna = genes if common_rna is None else common_rna & genes
@@ -119,11 +59,11 @@ def _write_adapter_audit() -> None:
                 "sp4": int(counts.get("sp4", 0)),
             }
         )
-    pd.DataFrame(rows).to_csv(OUTPUT_DIR / "input_adaptation_audit.csv", index=False)
-    (OUTPUT_DIR / "input_adaptation.json").write_text(
+    pd.DataFrame(rows).to_csv(output_dir / "input_adaptation_audit.csv", index=False)
+    (output_dir / "input_adaptation.json").write_text(
         json.dumps(
             {
-                "dataset_path": str(DATA_DIR),
+                "dataset_path": str(data_dir),
                 "sections": SECTIONS,
                 "total_spots": 1296 * len(SECTIONS),
                 "shared_rna_features": len(common_rna or set()),
@@ -143,45 +83,73 @@ def _write_adapter_audit() -> None:
     )
 
 
-def main() -> None:
-    _write_adapter_audit()
-    namespace = _load_pipeline()
-    sys.argv[1:1] = [
-        "--data_dir", str(DATA_DIR),
-        "--output_dir", str(OUTPUT_DIR),
-        "--section_order", ",".join(SECTIONS),
-        "--train",
-        "--epochs", "200",
-        "--seed", "42",
-        "--device", "cuda",
-        "--hvg_num", "1000",
-        "--hvg_num_adt", "100",
-        "--lambda_contrast", "0.1",
-        "--ot_prior_mode", "candidate_sparse",
-        "--bidirectional_ot_attention",
-        "--candidate_backend", "faiss_flat",
-        "--initial_modality_candidate_k", "100",
-        "--candidate_k", "200",
-        "--attention_topk", "10",
-        "--spatial_knn_k", "10",
-        "--graphsage_edge_batch_size", "100000",
-        "--training_loss_only",
-        "--decoder_chunk_size", "2048",
-        "--ot_attention_source_chunk_size", "1024",
-        "--checkpoint_ot_attention",
-        "--checkpoint_encoder_fusion",
-        "--checkpoint_decoder_chunks",
-        "--checkpoint_graph_encoder",
-        "--amp_dtype", "bf16",
-        "--cache_spatial_graphs",
-        "--save_candidate_qc",
-        "--save_outputs",
-        "--save_embeddings",
-        "--save_ot_prior_topk",
-        "--log_cuda_memory",
-    ]
-    namespace["run_misar_pipeline"](namespace["parse_args"]())
+def get_dataset_defaults():
+    """Dataset-specific values over the shared parser defaults."""
+    return {
+        "data_dir": str(DATA_DIR),
+        "output_dir": str(OUTPUT_DIR),
+        "section_order": ",".join(SECTIONS),
+        "train": True,
+        "epochs": 200,
+        "seed": 42,
+        "device": "cuda",
+        "hvg_num": 1000,
+        "hvg_num_adt": 100,
+        "lambda_contrast": 0.1,
+        "candidate_backend": "faiss_flat",
+        "initial_modality_candidate_k": 100,
+        "candidate_k": 200,
+        "attention_topk": 10,
+        "spatial_knn_k": 10,
+        "graphsage_edge_batch_size": 100000,
+        "training_loss_only": True,
+        "decoder_chunk_size": 2048,
+        "ot_attention_source_chunk_size": 1024,
+        "checkpoint_ot_attention": True,
+        "checkpoint_encoder_fusion": True,
+        "checkpoint_decoder_chunks": True,
+        "checkpoint_graph_encoder": True,
+        "amp_dtype": "bf16",
+        "cache_spatial_graphs": True,
+        "save_candidate_qc": True,
+        "save_outputs": True,
+        "save_embeddings": True,
+        "save_ot_prior_topk": True,
+        "log_cuda_memory": True,
+    }
 
+
+def parse_args(argv: list[str] | None = None):
+    defaults = get_dataset_defaults()
+    return misar.parse_args(
+        argv,
+        defaults=defaults,
+        dataset_name='Simulation',
+        secondary_modality="Protein",
+        secondary_name="adt",
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    section_info = {
+        section: {"dir": section, "sample": section, "stage": section}
+        for section in SECTIONS
+    }
+    run_config = misar.resolve_run_config(
+        args, section_info=section_info, dataset_name="Simulation",
+        secondary_modality="Protein", secondary_name="adt",
+    )
+    _write_adapter_audit(Path(args.data_dir), Path(args.output_dir))
+    misar.run_misar_pipeline(
+        args,
+        read_pair=read_pair,
+        section_info=section_info,
+        dataset_name='Simulation',
+        secondary_modality="Protein",
+        secondary_name="adt",
+        run_config=run_config,
+    )
 
 if __name__ == "__main__":
     main()

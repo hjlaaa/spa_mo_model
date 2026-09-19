@@ -16,21 +16,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model.configure import get_default_model_config
-from model.multimodal_preprocessing import preprocess_multisection_cosie_style
-from model.stage_model import StageMultiModalModel, should_update_ot
-from model.utils import ensure_dir
-
-
-def recursive_update(base: dict[str, Any], updates: Mapping[str, Any] | None) -> dict[str, Any]:
-    if updates is None:
-        return base
-    for key, value in updates.items():
-        if isinstance(value, Mapping) and isinstance(base.get(key), dict):
-            recursive_update(base[key], value)
-        else:
-            base[key] = value
-    return base
+from training.config import load_json, resolve_model_config
+from data_io.datasets import preprocess_multisection_cosie_style
+from model.stage_model import StageMultiModalModel
+from model.tensor_utils import tensor_to_numpy
+from training.fit import iter_fit_model
+from data_io.common import ensure_dir
 
 
 def parse_args():
@@ -60,14 +51,12 @@ def parse_args():
     parser.add_argument("--log_every", type=int, default=1)
     parser.add_argument("--save_every", type=int, default=0, help="Save checkpoint every N epochs; 0 disables.")
     parser.add_argument("--ot_update_interval", type=int, default=None)
+    parser.add_argument(
+        "--candidate_backend", choices=["faiss_ivf", "faiss_flat", "blockwise"], default="faiss_ivf",
+    )
     parser.add_argument("--save_embeddings", action="store_true", help="Save final embeddings as .npy.")
     parser.add_argument("--smoke_test", action="store_true", help="Run a tiny synthetic training smoke test.")
     return parser.parse_args()
-
-
-def load_json(path: str | Path) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
 
 
 def json_safe(value):
@@ -117,6 +106,13 @@ def load_preprocessed_inputs(args):
 
     if args.preprocess_config:
         cfg = load_json(args.preprocess_config)
+        misplaced = {"n_comps", "hvg_num", "target_sum", "use_harmony"}.intersection(
+            cfg.get("preprocessing", {})
+        )
+        if misplaced:
+            raise ValueError(
+                f"Generic preprocessing expects these fields at the top level: {sorted(misplaced)}"
+            )
         sections = cfg["sections"]
         result = preprocess_multisection_cosie_style(
             sections=sections,
@@ -124,7 +120,6 @@ def load_preprocessed_inputs(args):
             hvg_num=cfg.get("hvg_num", 3000),
             target_sum=cfg.get("target_sum"),
             use_harmony=cfg.get("use_harmony", True),
-            metacell=cfg.get("metacell", False),
             config=cfg,
         )
         section_order = args.section_order or result.get("section_ids")
@@ -168,29 +163,38 @@ def build_synthetic_training_inputs():
 
 
 def build_model_config(args):
-    config = get_default_model_config()
+    supplied = None
     if args.model_config:
-        recursive_update(config, load_json(args.model_config))
-    if args.epochs is not None:
-        config["training"]["epochs"] = args.epochs
-    if args.lr is not None:
-        config["training"]["lr"] = args.lr
-    if args.weight_decay is not None:
-        config["training"]["weight_decay"] = args.weight_decay
-    if args.device is not None:
-        config["training"]["device"] = args.device
-    if args.ot_update_interval is not None:
-        config["uot"]["update_interval"] = args.ot_update_interval
+        supplied = load_json(args.model_config)
+        # These JSON fields are only consumed by the MouseBrain runner. This
+        # entry uses its existing CLI backend and fixed retrieval settings.
+        unused = {
+            "uot": {
+                "candidate_backend", "initial_modality_candidate_k", "candidate_k",
+                "faiss_nlist", "faiss_nprobe", "faiss_device",
+                "faiss_train_sample_size", "faiss_query_batch_size", "stabilizer",
+            },
+            "training": {"seed", "max_spots_per_section", "output_dir"},
+        }
+        fields = [f"{section}.{key}" for section, keys in unused.items()
+                  for key in sorted(keys.intersection(supplied.get(section, {})))]
+        if fields:
+            raise ValueError(f"Unsupported JSON configuration fields for generic trainer: {fields}")
+    config = resolve_model_config(
+        model_config=supplied,
+        explicit_overrides={
+            "training": {
+                "epochs": args.epochs, "lr": args.lr,
+                "weight_decay": args.weight_decay, "device": args.device,
+            },
+            "uot": {"update_interval": args.ot_update_interval},
+        },
+    )
     if args.smoke_test:
         config["training"]["epochs"] = args.epochs or 3
         config["training"]["device"] = args.device or "cpu"
         config["uot"]["max_iter"] = 50
-        config["uot"]["tol"] = 1e-5
     return config
-
-
-def tensor_to_numpy(tensor: torch.Tensor):
-    return tensor.detach().cpu().numpy()
 
 
 def summarize_outputs(outputs):
@@ -260,103 +264,87 @@ def save_training_artifacts(
 
 
 def train_stage_model(args):
+    config = build_model_config(args)
     inputs = load_preprocessed_inputs(args)
     feature_dict = inputs["feature_dict"]
     spatial_loc_dict = inputs["spatial_loc_dict"]
     section_order = args.section_order or inputs.get("section_order")
-    config = build_model_config(args)
 
     model = StageMultiModalModel(config=config, feature_dict=feature_dict)
-    model.initialize_ot_prior(feature_dict, section_order=section_order)
+    uot_config = model.config["uot"]
+    # Preserve configured OT scalars; retrieval settings are the existing Stage defaults.
+    sparse_kwargs = {
+        "candidate_k": 200,
+        "attention_topk": int(uot_config["topk"]),
+        "candidate_backend": getattr(args, "candidate_backend", "faiss_ivf"),
+        "faiss_nlist": 4096,
+        "faiss_nprobe": 64,
+        "faiss_device": "auto",
+        "faiss_train_sample_size": 100000,
+        "faiss_query_batch_size": 8192,
+        "seed": 42,
+        "tau_a": float(uot_config["tau_a"]),
+        "tau_b": float(uot_config["tau_b"]),
+        "max_iter": int(uot_config["max_iter"]),
+        "stabilizer": float(model.config["ot_attention"]["delta"]),
+    }
+    if uot_config["enabled"]:
+        model.initialize_candidate_sparse_ot_prior(
+            feature_dict,
+            section_order=section_order,
+            initial_modality_candidate_k=100,
+            epsilon=float(uot_config["epsilon_init"]),
+            **sparse_kwargs,
+        )
+    else:
+        model.ot_prior = {}
 
-    optimizer = torch.optim.Adam(
-        model.parameters(),
+    fit_args = argparse.Namespace(
+        epochs=int(config["training"]["epochs"]),
         lr=float(config["training"]["lr"]),
         weight_decay=float(config["training"]["weight_decay"]),
+        device=config["training"]["device"],
+        amp_dtype="none",
+        update_interval=int(uot_config["update_interval"]),
+        **{key: value for key, value in sparse_kwargs.items()
+           if key not in {"tau_a", "tau_b", "max_iter", "stabilizer"}},
+        uot_epsilon=float(uot_config["epsilon_update"]),
+        uot_tau_a=sparse_kwargs["tau_a"],
+        uot_tau_b=sparse_kwargs["tau_b"],
+        uot_max_iter=sparse_kwargs["max_iter"],
+        uot_stabilizer=sparse_kwargs["stabilizer"],
+        training_loss_only=False,
+        decoder_chunk_size=0,
+        ot_attention_source_chunk_size=0,
+        cache_spatial_graphs=False,
+        checkpoint_ot_attention=False,
+        checkpoint_encoder_fusion=False,
+        checkpoint_decoder_chunks=False,
+        checkpoint_graph_encoder=False,
+        log_every=args.log_every,
+        log_cuda_memory_detail=False,
     )
-
-    epochs = int(config["training"]["epochs"])
-    update_interval = int(config["uot"]["update_interval"])
-    history: list[dict[str, float]] = []
-    last_outputs = None
-
-    for epoch in range(1, epochs + 1):
-        model.train()
-        outputs = model(
-            feature_dict=feature_dict,
-            spatial_loc_dict=spatial_loc_dict,
-            section_order=section_order,
-            epoch=epoch,
-        )
-        loss = outputs["losses"]["total_loss"]
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        record = {
-            "epoch": epoch,
-            "total_loss": float(outputs["losses"]["total_loss"].detach().cpu()),
-            "crossview_loss": float(outputs["losses"]["crossview_loss"].detach().cpu()),
-            "reconstruction_loss": float(outputs["losses"]["reconstruction_loss"].detach().cpu()),
-        }
-        history.append(record)
-        last_outputs = outputs
-
-        if args.log_every > 0 and (epoch == 1 or epoch % args.log_every == 0 or epoch == epochs):
-            print(
-                f"epoch={epoch} "
-                f"total={record['total_loss']:.6f} "
-                f"crossview={record['crossview_loss']:.6f} "
-                f"reconstruction={record['reconstruction_loss']:.6f}"
-            )
-
-        if should_update_ot(epoch, update_interval):
-            model.eval()
-            with torch.no_grad():
-                eval_outputs = model(
-                    feature_dict=feature_dict,
-                    spatial_loc_dict=spatial_loc_dict,
-                    section_order=section_order,
-                    epoch=epoch,
-                )
-                refresh_embeddings, context_embeddings, _ = model.prepare_ot_prior_refresh(
-                    eval_outputs,
-                    refresh_source="ot",
-                )
-                topology_weight = (
-                    float(model.config["uot"].get("topology_context_weight", 0.0))
-                    if bool(model.config["uot"].get("topology_aware_refresh_enabled", False))
-                    else 0.0
-                )
-                model.update_ot_prior(
-                    refresh_embeddings,
-                    section_order=section_order,
-                    context_embedding_dict=context_embeddings,
-                    topology_context_weight=topology_weight,
-                    embedding_source="ot",
-                )
-            print(f"Updated OT prior at epoch {epoch}.")
-
-        if args.output_dir and args.save_every > 0 and epoch % args.save_every == 0:
-            output_dir = Path(args.output_dir)
+    for is_final, history, outputs, _ in iter_fit_model(
+        model, feature_dict, spatial_loc_dict, None, section_order, fit_args,
+        clear_step_state=False,
+        record_elapsed_time=False,
+        allow_empty_epochs=True,
+        record_loss_weights=False,
+        refresh_ot=bool(uot_config["enabled"]),
+        yield_every=args.save_every if args.output_dir else 0,
+    ):
+        if is_final:
+            final_outputs = outputs
+        else:
             save_training_artifacts(
-                output_dir=output_dir,
+                output_dir=Path(args.output_dir),
                 model=model,
                 config=config,
                 history=history,
-                outputs=last_outputs,
+                outputs=outputs,
                 section_order=section_order,
                 save_embeddings=False,
             )
-
-    model.eval()
-    with torch.no_grad():
-        final_outputs = model(
-            feature_dict=feature_dict,
-            spatial_loc_dict=spatial_loc_dict,
-            section_order=section_order,
-            epoch=epochs,
-        )
 
     if args.output_dir:
         save_training_artifacts(

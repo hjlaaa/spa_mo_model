@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Callable, Mapping, Sequence
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from .configure import get_default_model_config
-from .linkage_construction import (
-    compute_initial_multimodal_uot_prior,
-    update_uot_prior_from_embeddings,
-)
+from .configure import get_default_model_config, reject_unsupported_model_config
 from .loss import (
     compute_pairwise_cosie_crossview_loss,
 )
@@ -27,22 +25,10 @@ from .model_component import (
 )
 from .sparse_uot import (
     compute_initial_bidirectional_candidate_sparse_uot_prior,
-    compute_initial_candidate_sparse_uot_prior,
     update_bidirectional_candidate_sparse_uot_prior_from_embeddings,
-    update_candidate_sparse_uot_prior_from_embeddings,
 )
-from .utils import compute_spatial_knn_graph_with_weights
-
-
-def _recursive_update(base: dict[str, Any], updates: Mapping[str, Any] | None) -> dict[str, Any]:
-    if updates is None:
-        return base
-    for key, value in updates.items():
-        if isinstance(value, Mapping) and isinstance(base.get(key), dict):
-            _recursive_update(base[key], value)
-        else:
-            base[key] = value
-    return base
+from .spatial_graph import compute_spatial_knn_graph_with_weights
+from .tensor_utils import tensor_to_numpy
 
 
 ForwardMemoryRecorder = Callable[[str, Any], None]
@@ -125,7 +111,7 @@ def should_update_ot(
 
     Recommended training pattern:
 
-    ``model.initialize_ot_prior(feature_dict, section_order)``
+    ``model.initialize_candidate_sparse_ot_prior(feature_dict, section_order)``
 
     ``for epoch in range(1, epochs + 1):``
 
@@ -143,11 +129,9 @@ def should_update_ot(
 
     ``            embeddings, contexts, _ = model.prepare_ot_prior_refresh(eval_outputs)``
 
-    ``            model.update_ot_prior(embeddings, section_order,``
+    ``            model.update_candidate_sparse_ot_prior(embeddings, section_order,``
 
-    ``                context_embedding_dict=contexts, topology_context_weight=0.2,``
-
-    ``                embedding_source="final")``
+    ``                context_embedding_dict=contexts, topology_context_weight=0.2)``
     """
 
     if update_interval <= 0:
@@ -230,28 +214,6 @@ def compute_self_excluded_spatial_context(
     return contexts, diagnostics
 
 
-def summarize_ot_topology_cost(
-    prior: Mapping[tuple[str, str], Mapping[str, Any]] | None,
-) -> dict[str, float]:
-    """Average O2-c0 cost diagnostics stored on directional priors."""
-
-    values: dict[str, list[float]] = {}
-    seen_metadata: set[int] = set()
-    for item in (prior or {}).values():
-        metadata = item.get("metadata")
-        if not isinstance(metadata, Mapping) or id(metadata) in seen_metadata:
-            continue
-        seen_metadata.add(id(metadata))
-        for key, value in metadata.items():
-            if key.startswith("topology_") and isinstance(value, (int, float)):
-                values.setdefault(key, []).append(float(value))
-    return {
-        key: float(sum(items) / len(items))
-        for key, items in values.items()
-        if items
-    }
-
-
 class StageMultiModalModel(nn.Module):
     """V2 stage model built on the V1 COSIE-style multimodal backbone.
 
@@ -271,7 +233,32 @@ class StageMultiModalModel(nn.Module):
         feature_dict: Mapping[str, Mapping[str, Any]] | None = None,
     ):
         super().__init__()
-        self.config = _recursive_update(get_default_model_config(), config)
+        if config is not None:
+            reject_unsupported_model_config(config)
+            if "self_path_mode" in config.get("graphsage", {}):
+                raise ValueError(
+                    "Retired GraphSAGE self_path_mode configuration; remove this field. "
+                    "GraphSAGE retains spatial self-loops and the outer residual."
+                )
+            retired_sources = {"dynamic_refresh_source", "update_from_final_embedding"}.intersection(
+                config.get("uot", {})
+            )
+            if retired_sources:
+                raise ValueError(
+                    f"Retired OT refresh configuration: {sorted(retired_sources)}; "
+                    "remove these fields. Dynamic refresh uses ot_embeddings."
+                )
+            retired_context_gate = {
+                "context_gate_enabled", "context_consistency_backprop_to_alpha", "context_eps"
+            }.intersection(config.get("ot_attention", {}))
+            if retired_context_gate:
+                raise ValueError(
+                    f"Retired attention context-gate configuration: {sorted(retired_context_gate)}; "
+                    "remove these fields. OT topology context remains supported."
+                )
+        # Training callers supply the complete resolved configuration.  Keep
+        # the standalone no-config API without merging defaults a second time.
+        self.config = get_default_model_config() if config is None else deepcopy(config)
         self.latent_dim = int(self.config["model"]["latent_dim"])
         self.canonical_modality_order = tuple(self.config["model"]["modalities_supported"])
         single_cfg = self.config["model"].get("single_modality_mode", {})
@@ -309,6 +296,7 @@ class StageMultiModalModel(nn.Module):
         self.decoders = nn.ModuleDict()
         self.ot_prior: dict[tuple[str, str], dict[str, Any]] | None = None
         self._spatial_graph_cache: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor]] = {}
+        self._spatial_graph_cache_inputs: dict[tuple[Any, ...], np.ndarray] = {}
 
         self.fusion_modules = nn.ModuleDict()
         for modality_order in self.valid_modality_sets:
@@ -328,7 +316,6 @@ class StageMultiModalModel(nn.Module):
         self.graphsage = WeightedResidualGraphSAGE(
             input_dim=int(graph_cfg["input_dim"]),
             output_dim=int(graph_cfg["output_dim"]),
-            self_path_mode=graph_cfg.get("self_path_mode", "legacy"),
             dropout=float(graph_cfg["dropout"]),
             activation=graph_cfg["activation"],
             norm=graph_cfg["norm"],
@@ -344,7 +331,6 @@ class StageMultiModalModel(nn.Module):
         self.post_ot_graphsage = WeightedResidualGraphSAGE(
             input_dim=int(graph_cfg["input_dim"]),
             output_dim=int(graph_cfg["output_dim"]),
-            self_path_mode=graph_cfg.get("self_path_mode", "legacy"),
             dropout=float(graph_cfg["dropout"]),
             activation=graph_cfg["activation"],
             norm=graph_cfg["norm"],
@@ -368,10 +354,6 @@ class StageMultiModalModel(nn.Module):
             residual=bool(attn_cfg["residual"]),
             norm=attn_cfg["norm"],
             delta=float(attn_cfg["delta"]),
-            context_gate_enabled=bool(attn_cfg.get("context_gate_enabled", False)),
-            context_consistency_backprop_to_alpha=bool(
-                attn_cfg.get("context_consistency_backprop_to_alpha", False)
-            ),
         )
 
         if feature_dict is not None:
@@ -533,6 +515,16 @@ class StageMultiModalModel(nn.Module):
         """Clear cached CPU spatial KNN graphs."""
 
         self._spatial_graph_cache.clear()
+        self._spatial_graph_cache_inputs.clear()
+
+    @staticmethod
+    def _spatial_graph_input_matches(snapshot, coords: np.ndarray) -> bool:
+        return (
+            snapshot is not None
+            and snapshot.shape == coords.shape
+            and snapshot.dtype == coords.dtype
+            and np.array_equal(snapshot, coords)
+        )
 
     def _get_spatial_graph(
         self,
@@ -543,12 +535,11 @@ class StageMultiModalModel(nn.Module):
         device: torch.device,
         cache_spatial_graphs: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        include_self_loop = graph_sage_cfg.get("self_path_mode", "legacy") != "no_adj_self"
         if not cache_spatial_graphs:
             return compute_spatial_knn_graph_with_weights(
                 spatial_coords,
                 k=int(graph_cfg["knn_neighbors_spatial"]),
-                include_self_loop=include_self_loop,
+                include_self_loop=True,
                 undirected=True,
                 delta=float(graph_sage_cfg["delta"]),
                 device=device,
@@ -559,22 +550,41 @@ class StageMultiModalModel(nn.Module):
             section,
             spatial_n,
             int(graph_cfg["knn_neighbors_spatial"]),
-            include_self_loop,
+            True,
             True,
             float(graph_sage_cfg["delta"]),
         )
-        if cache_key not in self._spatial_graph_cache:
+        coords = (
+            tensor_to_numpy(spatial_coords)
+            if isinstance(spatial_coords, torch.Tensor)
+            else np.asarray(spatial_coords)
+        )
+        cached = self._spatial_graph_cache.get(cache_key)
+        snapshot = self._spatial_graph_cache_inputs.get(cache_key)
+        if cached is None or not self._spatial_graph_input_matches(snapshot, coords):
+            # Section names are lookup namespaces, not graph dependencies.
+            cached = None
+            for key, entry in self._spatial_graph_cache.items():
+                candidate = self._spatial_graph_cache_inputs.get(key)
+                if key[1:] == cache_key[1:] and self._spatial_graph_input_matches(candidate, coords):
+                    cached, snapshot = entry, candidate
+                    break
+        if cached is None:
+            snapshot = coords.copy()
+            snapshot.setflags(write=False)
             edge_index_cpu, edge_weight_cpu = compute_spatial_knn_graph_with_weights(
-                spatial_coords,
+                snapshot,
                 k=int(graph_cfg["knn_neighbors_spatial"]),
-                include_self_loop=include_self_loop,
+                include_self_loop=True,
                 undirected=True,
                 delta=float(graph_sage_cfg["delta"]),
                 device=torch.device("cpu"),
             )
-            self._spatial_graph_cache[cache_key] = (edge_index_cpu, edge_weight_cpu)
+            cached = (edge_index_cpu, edge_weight_cpu)
+        self._spatial_graph_cache[cache_key] = cached
+        self._spatial_graph_cache_inputs[cache_key] = snapshot
 
-        edge_index_cpu, edge_weight_cpu = self._spatial_graph_cache[cache_key]
+        edge_index_cpu, edge_weight_cpu = cached
         return edge_index_cpu.to(device), edge_weight_cpu.to(device)
 
     def _decode_and_reconstruct_section(
@@ -680,28 +690,15 @@ class StageMultiModalModel(nn.Module):
     def prepare_ot_prior_refresh(
         self,
         outputs: Mapping[str, Any],
-        refresh_source: str | None = None,
     ) -> tuple[
         dict[str, torch.Tensor],
         dict[str, torch.Tensor] | None,
         dict[str, Any],
     ]:
-        """Prepare detached semantic and local-context inputs for OT refresh."""
+        """Prepare detached OT-attention embeddings and their spatial contexts for refresh."""
 
         uot_cfg = self.config["uot"]
-        source = str(
-            refresh_source or uot_cfg.get("dynamic_refresh_source", "ot")
-        )
-        output_key_by_source = {
-            "ot": "ot_embeddings",
-            "final": "final_embeddings",
-            "fused": "fused_embeddings",
-        }
-        if source not in output_key_by_source:
-            raise ValueError(
-                f"Unsupported OT refresh_source {source!r}; expected 'ot', 'final', or 'fused'."
-            )
-        output_key = output_key_by_source[source]
+        output_key = "ot_embeddings"
         values = outputs.get(output_key)
         if not isinstance(values, Mapping) or not values:
             raise KeyError(f"OT prior refresh requested unavailable output {output_key!r}.")
@@ -722,93 +719,30 @@ class StageMultiModalModel(nn.Module):
         contexts: dict[str, torch.Tensor] | None = None
         context_diagnostics: dict[str, dict[str, float]] = {}
         if topology_enabled and context_weight > 0.0:
-            fused_contexts = outputs.get("context_embeddings")
-            if source == "fused" and isinstance(fused_contexts, Mapping):
-                contexts = {}
-                missing_contexts = [
-                    section for section in embeddings if section not in fused_contexts
-                ]
-                if missing_contexts:
-                    raise KeyError(
-                        f"Missing fused spatial contexts for sections: {missing_contexts}"
-                    )
-                for section in embeddings:
-                    value = fused_contexts[section]
-                    if not isinstance(value, torch.Tensor):
-                        raise TypeError(
-                            f"OT prior refresh context for {section} is not a tensor."
-                        )
-                    if value.shape != embeddings[str(section)].shape:
-                        raise ValueError(
-                            f"OT prior refresh context shape for {section} is "
-                            f"{tuple(value.shape)}, expected {tuple(embeddings[str(section)].shape)}."
-                        )
-                    contexts[str(section)] = value.detach()
-            else:
-                spatial_graphs = outputs.get("spatial_graph_dict")
-                if not isinstance(spatial_graphs, Mapping):
-                    raise KeyError(
-                        "OT context refresh requires spatial_graph_dict in full outputs."
-                    )
-                contexts, context_diagnostics = compute_self_excluded_spatial_context(
-                    embeddings,
-                    spatial_graphs,
-                    delta=float(self.config["ot_attention"]["delta"]),
-                    edge_batch_size=self.config["graphsage"].get(
-                        "edge_batch_size", 200000
-                    ),
+            spatial_graphs = outputs.get("spatial_graph_dict")
+            if not isinstance(spatial_graphs, Mapping):
+                raise KeyError(
+                    "OT context refresh requires spatial_graph_dict in full outputs."
                 )
+            contexts, context_diagnostics = compute_self_excluded_spatial_context(
+                embeddings,
+                spatial_graphs,
+                delta=float(self.config["ot_attention"]["delta"]),
+                edge_batch_size=self.config["graphsage"].get(
+                    "edge_batch_size", 200000
+                ),
+            )
 
         diagnostics: dict[str, Any] = {
-            "refresh_source": source,
-            "retrieval_source": source,
-            "semantic_source": source,
-            "context_source": f"{source}_spatial_context",
+            "refresh_source": "ot",
+            "retrieval_source": "ot",
+            "semantic_source": "ot",
+            "context_source": "ot_spatial_context",
             "topology_aware_refresh_enabled": topology_enabled,
             "topology_context_weight": context_weight if topology_enabled else 0.0,
             "context": context_diagnostics,
         }
         return embeddings, contexts, diagnostics
-
-    def initialize_ot_prior(
-        self,
-        feature_dict: Mapping[str, Mapping[str, Any]],
-        section_order: Sequence[str] | None = None,
-    ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Initialize adjacent-stage UOT priors from preprocessed modality features."""
-
-        if not self.config["uot"]["enabled"]:
-            self.ot_prior = {}
-            return self.ot_prior
-        resolved_order = self._resolve_section_order(feature_dict, section_order)
-        expected_modality_order: tuple[str, ...] | None = None
-        for section in resolved_order:
-            modality_order = self._resolve_modality_order(feature_dict[section])
-            if expected_modality_order is None:
-                expected_modality_order = modality_order
-            elif modality_order != expected_modality_order:
-                raise ValueError(
-                    "All sections used for OT prior initialization must use the same observed modality set; "
-                    f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
-                )
-        uot_cfg = self.config["uot"]
-        self.ot_prior = compute_initial_multimodal_uot_prior(
-            feature_dict=feature_dict,
-            section_order=resolved_order,
-            modalities=expected_modality_order or self.config["model"]["modalities_supported"],
-            epsilon_init=float(uot_cfg["epsilon_init"]),
-            tau_a=float(uot_cfg["tau_a"]),
-            tau_b=float(uot_cfg["tau_b"]),
-            max_iter=int(uot_cfg["max_iter"]),
-            tol=float(uot_cfg["tol"]),
-            topk=int(uot_cfg["topk"]),
-            delta=float(self.config["ot_attention"]["delta"]),
-            check_every=int(uot_cfg["check_every"]),
-            clip_cost_min=float(uot_cfg["clip_cost_min"]),
-            clip_cost_max=float(uot_cfg["clip_cost_max"]),
-            keep_dense=bool(uot_cfg.get("keep_dense", False)),
-        )
-        return self.ot_prior
 
     @torch.no_grad()
     def initialize_candidate_sparse_ot_prior(
@@ -830,9 +764,8 @@ class StageMultiModalModel(nn.Module):
         tau_b: float = 1.0,
         max_iter: int = 100,
         stabilizer: float = 1e-8,
-        bidirectional: bool = False,
     ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Initialize adjacent-stage candidate-sparse UOT priors."""
+        """Initialize both directions of each adjacent-stage candidate-sparse UOT prior."""
 
         if not self.config["uot"]["enabled"]:
             self.ot_prior = {}
@@ -849,12 +782,7 @@ class StageMultiModalModel(nn.Module):
                     f"{section} has {list(modality_order)} but expected {list(expected_modality_order)}."
                 )
         device = self._select_device(feature_dict)
-        init_fn = (
-            compute_initial_bidirectional_candidate_sparse_uot_prior
-            if bidirectional
-            else compute_initial_candidate_sparse_uot_prior
-        )
-        self.ot_prior = init_fn(
+        self.ot_prior = compute_initial_bidirectional_candidate_sparse_uot_prior(
             feature_dict=feature_dict,
             section_order=resolved_order,
             modalities=expected_modality_order or self.config["model"]["modalities_supported"],
@@ -878,41 +806,6 @@ class StageMultiModalModel(nn.Module):
         return self.ot_prior
 
     @torch.no_grad()
-    def update_ot_prior(
-        self,
-        final_embedding_dict: Mapping[str, torch.Tensor],
-        section_order: Sequence[str] | None = None,
-        context_embedding_dict: Mapping[str, torch.Tensor] | None = None,
-        topology_context_weight: float = 0.0,
-        embedding_source: str = "final",
-    ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Refresh adjacent-stage UOT priors from detached embeddings."""
-
-        if not self.config["uot"]["enabled"]:
-            self.ot_prior = {}
-            return self.ot_prior
-        uot_cfg = self.config["uot"]
-        self.ot_prior = update_uot_prior_from_embeddings(
-            final_embedding_dict=final_embedding_dict,
-            section_order=section_order,
-            epsilon_update=float(uot_cfg["epsilon_update"]),
-            tau_a=float(uot_cfg["tau_a"]),
-            tau_b=float(uot_cfg["tau_b"]),
-            max_iter=int(uot_cfg["max_iter"]),
-            tol=float(uot_cfg["tol"]),
-            topk=int(uot_cfg["topk"]),
-            delta=float(self.config["ot_attention"]["delta"]),
-            check_every=int(uot_cfg["check_every"]),
-            clip_cost_min=float(uot_cfg["clip_cost_min"]),
-            clip_cost_max=float(uot_cfg["clip_cost_max"]),
-            keep_dense=bool(uot_cfg.get("keep_dense", False)),
-            context_embedding_dict=context_embedding_dict,
-            topology_context_weight=topology_context_weight,
-            embedding_source=embedding_source,
-        )
-        return self.ot_prior
-
-    @torch.no_grad()
     def update_candidate_sparse_ot_prior(
         self,
         embedding_dict: Mapping[str, torch.Tensor],
@@ -931,23 +824,16 @@ class StageMultiModalModel(nn.Module):
         tau_b: float = 1.0,
         max_iter: int = 100,
         stabilizer: float = 1e-8,
-        candidate_source: str = "fused",
-        bidirectional: bool = False,
         context_embedding_dict: Mapping[str, torch.Tensor] | None = None,
         topology_context_weight: float = 0.0,
     ) -> dict[tuple[str, str], dict[str, Any]]:
-        """Refresh candidate-sparse UOT priors from fused/final embeddings."""
+        """Refresh both directions from OT-attention embeddings and their contexts."""
 
         if not self.config["uot"]["enabled"]:
             self.ot_prior = {}
             return self.ot_prior
         device = self._select_device({section: {"embedding": value} for section, value in embedding_dict.items()})
-        update_fn = (
-            update_bidirectional_candidate_sparse_uot_prior_from_embeddings
-            if bidirectional
-            else update_candidate_sparse_uot_prior_from_embeddings
-        )
-        self.ot_prior = update_fn(
+        self.ot_prior = update_bidirectional_candidate_sparse_uot_prior_from_embeddings(
             embedding_dict=embedding_dict,
             section_order=section_order,
             candidate_k=candidate_k,
@@ -965,7 +851,6 @@ class StageMultiModalModel(nn.Module):
             max_iter=max_iter,
             stabilizer=stabilizer,
             device=device,
-            candidate_source=candidate_source,
             context_embedding_dict=context_embedding_dict,
             topology_context_weight=topology_context_weight,
         )
@@ -983,7 +868,6 @@ class StageMultiModalModel(nn.Module):
         decoder_chunk_size: int | None = None,
         ot_attention_source_chunk_size: int | None = None,
         cache_spatial_graphs: bool = False,
-        bidirectional_ot_attention: bool = False,
         checkpoint_ot_attention: bool = False,
         checkpoint_encoder_fusion: bool = False,
         checkpoint_decoder_chunks: bool = False,
@@ -1025,7 +909,6 @@ class StageMultiModalModel(nn.Module):
         )
 
         fused_embeddings: dict[str, torch.Tensor] = {}
-        context_embeddings: dict[str, torch.Tensor] = {}
         graphsage_embeddings: dict[str, torch.Tensor] = {}
         ot_embeddings: dict[str, torch.Tensor] = {}
         final_embeddings: dict[str, torch.Tensor] = {}
@@ -1048,7 +931,6 @@ class StageMultiModalModel(nn.Module):
                 "sections": list(resolved_order),
                 "training_loss_only": bool(training_loss_only),
                 "return_full_outputs": bool(return_full_outputs),
-                "bidirectional_ot_attention": bool(bidirectional_ot_attention),
                 "checkpoint_ot_attention": bool(checkpoint_ot_attention),
                 "checkpoint_encoder_fusion": bool(checkpoint_encoder_fusion),
                 "checkpoint_decoder_chunks": bool(checkpoint_decoder_chunks),
@@ -1224,42 +1106,6 @@ class StageMultiModalModel(nn.Module):
             if keep_full_outputs:
                 fused_embeddings[section] = fused
 
-            context_gate_enabled = bool(
-                self.config["ot_attention"].get("context_gate_enabled", False)
-            )
-            need_spatial_context = context_gate_enabled or (
-                keep_full_outputs
-                and not self.training
-                and str(
-                    self.config["uot"].get("dynamic_refresh_source", "ot")
-                ) == "fused"
-                and bool(self.config["uot"].get("topology_aware_refresh_enabled", False))
-                and float(self.config["uot"].get("topology_context_weight", 0.0)) > 0.0
-            )
-            if need_spatial_context:
-                context_embeddings[section] = spatial_pool_self_excluded(
-                    fused.detach(),
-                    edge_index,
-                    edge_weight,
-                    edge_batch_size=graph_sage_cfg.get("edge_batch_size", 200000),
-                    eps=float(self.config["ot_attention"].get("context_eps", 1e-8)),
-                    l2_normalize=True,
-                )
-                _record_forward_memory(
-                    memory_recorder,
-                    f"section_{section}_spatial_context_end",
-                    {
-                        "section": section,
-                        "context_shape": list(context_embeddings[section].shape),
-                        "context_requires_grad": bool(
-                            context_embeddings[section].requires_grad
-                        ),
-                        "edge_batch_size": int(
-                            graph_sage_cfg.get("edge_batch_size", 200000) or 200000
-                        ),
-                    },
-                )
-
             if graph_sage_cfg["enabled"]:
                 if use_graph_encoder_checkpoint:
                     graphsage_embeddings[section] = _checkpoint_graph_encoder_forward(
@@ -1286,14 +1132,23 @@ class StageMultiModalModel(nn.Module):
                 },
             )
 
-        if self.config["uot"]["enabled"] and self.config["ot_attention"]["enabled"]:
+        use_ot_attention = bool(
+            self.config["uot"]["enabled"] and self.config["ot_attention"]["enabled"]
+        )
+        if use_ot_attention:
+            required_pairs = [
+                pair
+                for source, target in zip(resolved_order[:-1], resolved_order[1:])
+                for pair in ((source, target), (target, source))
+            ]
+            missing_pairs = [pair for pair in required_pairs if pair not in (self.ot_prior or {})]
+            if missing_pairs:
+                raise ValueError(
+                    "OT attention requires an explicitly initialized bidirectional "
+                    f"candidate-sparse prior; missing directions: {missing_pairs}."
+                )
             if self.ot_prior is None:
-                self.initialize_ot_prior(feature_dict, section_order=resolved_order)
-                messages.append("Auto-initialized OT prior from preprocessed modality features.")
-        elif self.ot_prior is None:
-            self.ot_prior = {}
-
-        if bidirectional_ot_attention and self.config["ot_attention"]["enabled"]:
+                self.ot_prior = {}
             update_lists: dict[str, list[torch.Tensor]] = {section: [] for section in resolved_order}
             for (source_section, target_section), prior in (self.ot_prior or {}).items():
                 if source_section not in update_lists or target_section not in graphsage_embeddings:
@@ -1304,14 +1159,6 @@ class StageMultiModalModel(nn.Module):
                     topk_idx=prior["topk_idx"],
                     topk_weight=prior["topk_weight"],
                     confidence=prior["confidence"],
-                    source_context=context_embeddings.get(
-                        source_section,
-                        graphsage_embeddings[source_section].new_empty(0),
-                    ),
-                    target_context=context_embeddings.get(
-                        target_section,
-                        graphsage_embeddings[target_section].new_empty(0),
-                    ),
                     epoch=epoch,
                     source_chunk_size=ot_attention_source_chunk_size,
                     checkpoint_attention=checkpoint_ot_attention,
@@ -1349,47 +1196,10 @@ class StageMultiModalModel(nn.Module):
                     ot_embeddings[section] = graphsage_embeddings[section]
                     messages.append(f"No directional OT update found for {section}; used GraphSAGE output.")
         else:
-            for source_section, target_section in zip(resolved_order[:-1], resolved_order[1:]):
-                prior = (self.ot_prior or {}).get((source_section, target_section))
-                if prior is None or not self.config["ot_attention"]["enabled"]:
-                    ot_embeddings[source_section] = graphsage_embeddings[source_section]
-                    if prior is None:
-                        messages.append(f"No OT prior found for {source_section}->{target_section}; used GraphSAGE output.")
-                    continue
-                ot_embeddings[source_section] = self.ot_attention(
-                    source_h=graphsage_embeddings[source_section],
-                    target_h=graphsage_embeddings[target_section],
-                    topk_idx=prior["topk_idx"],
-                    topk_weight=prior["topk_weight"],
-                    confidence=prior["confidence"],
-                    source_context=context_embeddings.get(
-                        source_section,
-                        graphsage_embeddings[source_section].new_empty(0),
-                    ),
-                    target_context=context_embeddings.get(
-                        target_section,
-                        graphsage_embeddings[target_section].new_empty(0),
-                    ),
-                    epoch=epoch,
-                    source_chunk_size=ot_attention_source_chunk_size,
-                    checkpoint_attention=checkpoint_ot_attention,
-                )
-                _record_forward_memory(
-                    memory_recorder,
-                    f"ot_attention_update_{source_section}_from_{target_section}_end",
-                    {
-                        "source_section": source_section,
-                        "target_section": target_section,
-                        "source_spots": int(graphsage_embeddings[source_section].shape[0]),
-                        "target_spots": int(graphsage_embeddings[target_section].shape[0]),
-                        "source_chunk_size": int(ot_attention_source_chunk_size or 0),
-                        "checkpoint_ot_attention": bool(checkpoint_ot_attention),
-                    },
-                )
-
-            if resolved_order:
-                last_section = resolved_order[-1]
-                ot_embeddings[last_section] = graphsage_embeddings[last_section]
+            if self.ot_prior is None:
+                self.ot_prior = {}
+            for section in resolved_order:
+                ot_embeddings[section] = graphsage_embeddings[section]
         _record_forward_memory(
             memory_recorder,
             "ot_attention_end",
@@ -1496,7 +1306,6 @@ class StageMultiModalModel(nn.Module):
                 "fusion": "identity" if expected_modality_order and len(expected_modality_order) == 1 else "mlp",
             },
             "fused_embeddings": fused_embeddings,
-            "context_embeddings": context_embeddings,
             "graphsage_embeddings": graphsage_embeddings,
             "ot_embeddings": ot_embeddings,
             "final_embeddings": final_embeddings,

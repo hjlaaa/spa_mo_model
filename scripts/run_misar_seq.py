@@ -9,7 +9,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import anndata as ad
 import numpy as np
@@ -22,31 +22,31 @@ for path in [PROJECT_ROOT, SCRIPT_DIR]:
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from model.configure import get_default_model_config
-from model.data_preprocessing import load_cosie_style_data
+from training.config import resolve_model_config, parse_dataset_args, describe_run_config
+from data_io.misar import common_var_names, make_unique_rna_var_names, read_backed_pair
+from data_io.preprocessing import load_cosie_style_data
 from model.stage_model import StageMultiModalModel
-from run_crc_stereocite import (
+from training.fit import (
     CudaMemoryMonitor,
     amp_enabled,
-    ensure_dir,
     initialize_model_ot_prior,
     json_safe,
     run_one_forward,
+    train_small_crc_model,
+)
+from run_crc_stereocite import (
+    ensure_dir,
     save_final_embeddings,
     save_ot_prior_topk,
     save_spatial_arrays,
     select_obs_indices,
     subset_to_memory,
-    train_small_crc_model,
 )
 
 
-SECTION_INFO = {
-    "dataset1": {"dir": "dataset1", "sample": "E18_5-S1", "stage": "E18.5"},
-    "dataset2": {"dir": "dataset2", "sample": "E15_5-S1", "stage": "E15.5"},
-    "dataset3": {"dir": "dataset3", "sample": "E13_5-S1", "stage": "E13.5"},
-    "dataset4": {"dir": "dataset4", "sample": "E11_0-S1", "stage": "E11.0"},
-}
+from data_io.misar import SECTION_INFO
+
+
 DEFAULT_SECTION_ORDER = ["dataset4", "dataset3", "dataset2", "dataset1"]
 LABEL_COLUMNS = [
     "Sample",
@@ -58,101 +58,152 @@ LABEL_COLUMNS = [
 ]
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run MISAR-seq RNA+ATAC StageMultiModalModel pipeline.")
-    parser.add_argument("--data_dir", default="/home/hujinlan/spa_mo_model/data/MISAR-seq")
+def get_dataset_defaults(*, dataset_name="MISAR-seq", secondary_name="atac"):
+    """Current entry defaults; suite arguments remain explicit overrides."""
+    return {
+        'data_dir': f"/home/hujinlan/spa_mo_model/data/{dataset_name}",
+        'section_order': ",".join(DEFAULT_SECTION_ORDER),
+        'max_spots_per_section': None,
+        'spot_sampling': "first",
+        'max_shared_genes': None,
+        'max_shared_peaks': None,
+        'train': False,
+        'epochs': 0,
+        'lambda_contrast': None,
+        'lr': 1e-3,
+        'weight_decay': 0.0,
+        'update_interval': 20,
+        'log_every': 1,
+        'device': "cpu",
+        'candidate_backend': "faiss_ivf",
+        'initial_modality_candidate_k': 100,
+        'candidate_k': 200,
+        'attention_topk': 10,
+        'faiss_nlist': 256,
+        'faiss_nprobe': 32,
+        'faiss_device': "auto",
+        'faiss_train_sample_size': 20000,
+        'faiss_query_batch_size': 2048,
+        'uot_epsilon': 0.05,
+        'uot_tau_a': 1.0,
+        'uot_tau_b': 1.0,
+        'uot_stabilizer': 1e-8,
+        'uot_max_iter': 100,
+        'spatial_knn_k': 5,
+        'graphsage_edge_batch_size': 50000,
+        'post_ot_graphsage_scale': 1.0,
+        'graphsage_dropout': 0.1,
+        'encoder_dropout': 0.1,
+        'fusion_dropout': 0.1,
+        'ot_attention_dropout': 0.1,
+        'decoder_dropout': 0.1,
+        'training_loss_only': False,
+        'decoder_chunk_size': 50000,
+        'ot_attention_source_chunk_size': 50000,
+        'checkpoint_ot_attention': False,
+        'checkpoint_encoder_fusion': False,
+        'checkpoint_decoder_chunks': False,
+        'checkpoint_graph_encoder': False,
+        'amp_dtype': "none",
+        'cache_spatial_graphs': False,
+        'save_candidate_qc': False,
+        'save_outputs': False,
+        'save_embeddings': False,
+        'save_ot_prior_topk': False,
+        'log_cuda_memory': False,
+        'log_cuda_memory_detail': False,
+        'output_dir': "/home/hujinlan/spa_mo_model/results/misar_seq/dry_run",
+        'seed': 0,
+        'n_comps': 50,
+        'hvg_num': 3000,
+        f'hvg_num_{secondary_name}': 3000,
+        'no_harmony': False,
+    }
+
+
+def parse_args(
+    argv: list[str] | None = None,
+    *,
+    defaults: Mapping[str, Any] | None = None,
+    dataset_name: str = "MISAR-seq",
+    secondary_modality: str = "ATAC",
+    secondary_name: str = "atac",
+):
+    parser = argparse.ArgumentParser(description=f"Run {dataset_name} RNA+{secondary_modality} StageMultiModalModel pipeline.")
+    parser.add_argument("--data_dir", default=None)
     parser.add_argument(
         "--section_order",
-        default=",".join(DEFAULT_SECTION_ORDER),
+        default=None,
         help="Comma-separated section order used for adjacent OT links.",
     )
     parser.add_argument("--max_spots_per_section", type=int, default=None)
-    parser.add_argument("--spot_sampling", choices=["first", "random"], default="first")
+    parser.add_argument("--spot_sampling", choices=["first", "random"], default=None)
     parser.add_argument("--max_shared_genes", type=int, default=None)
     parser.add_argument("--max_shared_peaks", type=int, default=None)
-    parser.add_argument("--train", action="store_true")
-    parser.add_argument("--epochs", type=int, default=0)
+    parser.add_argument("--train", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lambda_contrast", type=float, default=None)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--update_interval", type=int, default=20)
-    parser.add_argument("--log_every", type=int, default=1)
-    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
-    parser.add_argument("--ot_prior_mode", choices=["dense", "candidate_sparse"], default="candidate_sparse")
-    parser.add_argument("--bidirectional_ot_attention", action="store_true")
-    parser.add_argument("--candidate_backend", choices=["faiss_ivf", "faiss_flat", "blockwise"], default="faiss_ivf")
-    parser.add_argument("--initial_modality_candidate_k", type=int, default=100)
-    parser.add_argument("--candidate_k", type=int, default=200)
-    parser.add_argument("--attention_topk", type=int, default=10)
-    parser.add_argument("--faiss_nlist", type=int, default=256)
-    parser.add_argument("--faiss_nprobe", type=int, default=32)
-    parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default="auto")
-    parser.add_argument("--faiss_train_sample_size", type=int, default=20000)
-    parser.add_argument("--faiss_query_batch_size", type=int, default=2048)
-    parser.add_argument(
-        "--dynamic_candidate_source",
-        choices=["fused", "ot", "final"],
-        default="ot",
-    )
-    parser.add_argument(
-        "--disable_context_attention_gate",
-        action="store_true",
-        default=True,
-        help="Use the v3-compatible 512D attention gate without local-context reliability.",
-    )
-    parser.add_argument(
-        "--enable_context_attention_gate",
-        action="store_false",
-        dest="disable_context_attention_gate",
-        help="Explicitly enable the experimental 513D microenvironment-aware gate.",
-    )
-    parser.add_argument("--uot_epsilon", type=float, default=0.05)
-    parser.add_argument("--uot_tau_a", type=float, default=1.0)
-    parser.add_argument("--uot_tau_b", type=float, default=1.0)
-    parser.add_argument("--uot_stabilizer", type=float, default=1e-8)
-    parser.add_argument("--uot_max_iter", type=int, default=100)
-    parser.add_argument("--spatial_knn_k", type=int, default=5)
-    parser.add_argument("--graphsage_edge_batch_size", type=int, default=50000)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--update_interval", type=int, default=None)
+    parser.add_argument("--log_every", type=int, default=None)
+    parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
+    parser.add_argument("--candidate_backend", choices=["faiss_ivf", "faiss_flat", "blockwise"], default=None)
+    parser.add_argument("--initial_modality_candidate_k", type=int, default=None)
+    parser.add_argument("--candidate_k", type=int, default=None)
+    parser.add_argument("--attention_topk", type=int, default=None)
+    parser.add_argument("--faiss_nlist", type=int, default=None)
+    parser.add_argument("--faiss_nprobe", type=int, default=None)
+    parser.add_argument("--faiss_device", choices=["auto", "cpu", "gpu"], default=None)
+    parser.add_argument("--faiss_train_sample_size", type=int, default=None)
+    parser.add_argument("--faiss_query_batch_size", type=int, default=None)
+    parser.add_argument("--uot_epsilon", type=float, default=None)
+    parser.add_argument("--uot_tau_a", type=float, default=None)
+    parser.add_argument("--uot_tau_b", type=float, default=None)
+    parser.add_argument("--uot_stabilizer", type=float, default=None)
+    parser.add_argument("--uot_max_iter", type=int, default=None)
+    parser.add_argument("--spatial_knn_k", type=int, default=None)
+    parser.add_argument("--graphsage_edge_batch_size", type=int, default=None)
     parser.add_argument(
         "--post_ot_graphsage_scale",
         type=float,
-        default=1.0,
+        default=None,
         help="Fixed scale on the post-OT GraphSAGE residual branch.",
     )
-    parser.add_argument("--graphsage_dropout", type=float, default=0.1)
-    parser.add_argument("--encoder_dropout", type=float, default=0.1)
-    parser.add_argument("--fusion_dropout", type=float, default=0.1)
-    parser.add_argument("--ot_attention_dropout", type=float, default=0.1)
-    parser.add_argument("--decoder_dropout", type=float, default=0.1)
-    parser.add_argument("--training_loss_only", action="store_true")
-    parser.add_argument("--decoder_chunk_size", type=int, default=50000)
-    parser.add_argument("--ot_attention_source_chunk_size", type=int, default=50000)
-    parser.add_argument("--checkpoint_ot_attention", action="store_true")
-    parser.add_argument("--checkpoint_encoder_fusion", action="store_true")
-    parser.add_argument("--checkpoint_decoder_chunks", action="store_true")
-    parser.add_argument("--checkpoint_graph_encoder", action="store_true")
-    parser.add_argument("--amp_dtype", choices=["none", "bf16", "fp16"], default="none")
-    parser.add_argument("--cache_spatial_graphs", action="store_true")
-    parser.add_argument("--save_candidate_qc", action="store_true")
-    parser.add_argument("--save_outputs", action="store_true")
-    parser.add_argument("--save_embeddings", action="store_true")
-    parser.add_argument("--save_ot_prior_topk", action="store_true")
-    parser.add_argument("--log_cuda_memory", action="store_true")
-    parser.add_argument("--log_cuda_memory_detail", action="store_true")
-    parser.add_argument("--output_dir", default="/home/hujinlan/spa_mo_model/results/misar_seq/dry_run")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--n_comps", type=int, default=50)
-    parser.add_argument("--hvg_num", type=int, default=3000, help="HVG count for RNA.")
-    parser.add_argument("--hvg_num_atac", type=int, default=3000, help="Highly variable peak count for ATAC.")
-    parser.add_argument("--no_harmony", action="store_true")
-    return parser.parse_args()
+    parser.add_argument("--graphsage_dropout", type=float, default=None)
+    parser.add_argument("--encoder_dropout", type=float, default=None)
+    parser.add_argument("--fusion_dropout", type=float, default=None)
+    parser.add_argument("--ot_attention_dropout", type=float, default=None)
+    parser.add_argument("--decoder_dropout", type=float, default=None)
+    parser.add_argument("--training_loss_only", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--decoder_chunk_size", type=int, default=None)
+    parser.add_argument("--ot_attention_source_chunk_size", type=int, default=None)
+    parser.add_argument("--checkpoint_ot_attention", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--checkpoint_encoder_fusion", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--checkpoint_decoder_chunks", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--checkpoint_graph_encoder", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--amp_dtype", choices=["none", "bf16", "fp16"], default=None)
+    parser.add_argument("--cache_spatial_graphs", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--save_candidate_qc", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--save_outputs", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--save_embeddings", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--save_ot_prior_topk", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--log_cuda_memory", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--log_cuda_memory_detail", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--output_dir", default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--n_comps", type=int, default=None)
+    parser.add_argument("--hvg_num", type=int, default=None, help="HVG count for RNA.")
+    parser.add_argument(f"--hvg_num_{secondary_name}", type=int, default=None, help=f"Highly variable peak count for {secondary_modality}.")
+    parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, default=None)
+    return parse_dataset_args(parser, argv, {**get_dataset_defaults(dataset_name=dataset_name, secondary_name=secondary_name), **(defaults or {})})
 
 
-def parse_section_order(text: str) -> list[str]:
+def parse_section_order(text: str, section_info=SECTION_INFO) -> list[str]:
     order = [item.strip() for item in text.split(",") if item.strip()]
     if not order:
         raise ValueError("--section_order must contain at least one section.")
-    unknown = [section for section in order if section not in SECTION_INFO]
+    unknown = [section for section in order if section not in section_info]
     if unknown:
         raise ValueError(f"Unknown MISAR sections in --section_order: {unknown}")
     if len(set(order)) != len(order):
@@ -166,61 +217,6 @@ def release_cache() -> None:
         torch.cuda.empty_cache()
 
 
-def read_backed_pair(data_dir: Path, section: str) -> tuple[ad.AnnData, ad.AnnData]:
-    section_dir = data_dir / SECTION_INFO[section]["dir"]
-    rna_path = section_dir / "adata_RNA.h5ad"
-    atac_path = section_dir / "adata_ATAC.h5ad"
-    if not rna_path.exists():
-        raise FileNotFoundError(rna_path)
-    if not atac_path.exists():
-        raise FileNotFoundError(atac_path)
-    return ad.read_h5ad(rna_path, backed="r"), ad.read_h5ad(atac_path, backed="r")
-
-
-def make_unique_rna_var_names(section: str, rna: ad.AnnData) -> tuple[dict[str, Any], pd.DataFrame]:
-    before_unique = bool(rna.var_names.is_unique)
-    original = pd.Index(rna.var_names.astype(str))
-    counts = pd.Series(original).value_counts()
-    duplicated = original.duplicated(keep=False)
-    rna.var["gene_symbol_original"] = original.to_numpy()
-    rna.var["was_duplicate_gene_symbol"] = duplicated
-    rna.var["gene_symbol_original_count"] = [int(counts[symbol]) for symbol in original]
-    rna.var_names = pd.Index(original)
-    rna.var_names_make_unique()
-    if not rna.var_names.is_unique:
-        raise ValueError(f"{section}: RNA var_names are still not unique after var_names_make_unique().")
-    rna.var["gene_symbol_make_unique"] = rna.var_names.astype(str)
-    table = pd.DataFrame(
-        {
-            "gene_symbol_original": original.to_numpy(),
-            "gene_symbol_make_unique": rna.var_names.astype(str).to_numpy(),
-            "was_duplicate_gene_symbol": duplicated,
-            "gene_symbol_original_count": [int(counts[symbol]) for symbol in original],
-        }
-    )
-    duplicate_summary = (
-        table[table["was_duplicate_gene_symbol"]]
-        .groupby("gene_symbol_original", sort=True)
-        .agg(
-            count=("gene_symbol_make_unique", "size"),
-            make_unique_names=("gene_symbol_make_unique", lambda values: ";".join(values)),
-        )
-        .reset_index()
-    )
-    return (
-        {
-            "shape": list(rna.shape),
-            "var_names_unique_before": before_unique,
-            "var_names_unique_after": bool(rna.var_names.is_unique),
-            "duplicate_gene_symbol_groups": int(duplicate_summary.shape[0]),
-            "duplicate_extra_columns": int((duplicate_summary["count"] - 1).sum())
-            if not duplicate_summary.empty
-            else 0,
-        },
-        duplicate_summary,
-    )
-
-
 def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
     arr = np.asarray(spatial)
     return {
@@ -229,22 +225,26 @@ def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
     }
 
 
-def validate_rna_atac_alignment(section: str, rna: ad.AnnData, atac: ad.AnnData) -> dict[str, Any]:
+def validate_rna_atac_alignment(
+    section: str, rna: ad.AnnData, atac: ad.AnnData, secondary_modality: str = "ATAC"
+) -> dict[str, Any]:
     if list(rna.obs_names) != list(atac.obs_names):
-        raise ValueError(f"{section}: RNA and ATAC obs_names are not identical.")
+        raise ValueError(f"{section}: RNA and {secondary_modality} obs_names are not identical.")
     if "spatial" not in rna.obsm:
         raise KeyError(f"{section}: RNA is missing obsm['spatial'].")
     if "spatial" not in atac.obsm:
-        raise KeyError(f"{section}: ATAC is missing obsm['spatial'].")
+        raise KeyError(f"{section}: {secondary_modality} is missing obsm['spatial'].")
     rna_spatial = np.asarray(rna.obsm["spatial"])
     atac_spatial = np.asarray(atac.obsm["spatial"])
     if rna_spatial.shape != atac_spatial.shape:
-        raise ValueError(f"{section}: RNA and ATAC spatial shapes differ.")
+        raise ValueError(f"{section}: RNA and {secondary_modality} spatial shapes differ.")
     spatial_match = bool(np.allclose(rna_spatial, atac_spatial))
     if not spatial_match:
-        raise ValueError(f"{section}: RNA and ATAC spatial coordinates differ.")
+        raise ValueError(f"{section}: RNA and {secondary_modality} spatial coordinates differ.")
     label_summary = {}
     for column in LABEL_COLUMNS:
+        if column == "ATAC_Clusters":
+            column = f"{secondary_modality}_Clusters"
         if column in rna.obs:
             label_summary[column] = {
                 "n_unique": int(rna.obs[column].astype(str).nunique(dropna=False)),
@@ -261,23 +261,6 @@ def validate_rna_atac_alignment(section: str, rna: ad.AnnData, atac: ad.AnnData)
         "spatial_range": spatial_range(rna_spatial),
         "labels": label_summary,
     }
-
-
-def common_var_names(
-    adatas: Mapping[str, ad.AnnData],
-    section_order: list[str],
-    max_features: int | None,
-    label: str,
-) -> list[str]:
-    common = pd.Index(adatas[section_order[0]].var_names.astype(str))
-    for section in section_order[1:]:
-        common = common.intersection(pd.Index(adatas[section].var_names.astype(str)))
-    if common.empty:
-        raise ValueError(f"No shared {label} features found across MISAR sections.")
-    selected = list(common[:max_features]) if max_features is not None else list(common)
-    if not selected:
-        raise ValueError(f"No {label} features selected.")
-    return selected
 
 
 def save_list(path: Path, values: list[str]) -> None:
@@ -309,6 +292,7 @@ def save_obs_metadata(
     rna_mem: Mapping[str, ad.AnnData],
     obs_indices: Mapping[str, np.ndarray | slice],
     backed_rna: Mapping[str, ad.AnnData],
+    section_info=SECTION_INFO,
 ) -> dict[str, str]:
     paths = {}
     for section in section_order:
@@ -319,7 +303,7 @@ def save_obs_metadata(
         obs["spatial_x"] = spatial[:, 0]
         obs["spatial_y"] = spatial[:, 1]
         obs["section"] = section
-        obs["stage"] = SECTION_INFO[section]["stage"]
+        obs["stage"] = section_info[section]["stage"]
         path = output_dir / f"obs_metadata_{section}.csv"
         obs.to_csv(path, index=False)
         paths[section] = str(path)
@@ -358,42 +342,41 @@ def rename_section_keys(mapping: Mapping[str, Any], section_order: list[str]) ->
     return {key_map.get(section, section): value for section, value in mapping.items()}
 
 
-def make_model_config(args) -> dict[str, Any]:
-    config = get_default_model_config()
-    config["model"]["modalities_supported"] = ["RNA", "ATAC"]
-    config["model"]["valid_modality_sets"] = [["RNA", "ATAC"]]
-    config["training"]["device"] = args.device
-    config["training"]["epochs"] = int(args.epochs)
-    config["training"]["lr"] = float(args.lr)
-    config["training"]["weight_decay"] = float(args.weight_decay)
+def make_model_config(args, secondary_modality: str = "ATAC") -> dict[str, Any]:
+    config = resolve_model_config(
+        input_config={
+            "training": {
+                "device": args.device, "epochs": int(args.epochs),
+                "lr": float(args.lr), "weight_decay": float(args.weight_decay),
+            },
+            "uot": {
+                "max_iter": int(args.uot_max_iter), "topk": int(args.attention_topk),
+                "epsilon_update": float(args.uot_epsilon),
+                "tau_a": float(args.uot_tau_a), "tau_b": float(args.uot_tau_b),
+                "update_interval": int(args.update_interval),
+            },
+            "graph": {"knn_neighbors_spatial": int(args.spatial_knn_k)},
+            "graphsage": {
+                "edge_batch_size": int(args.graphsage_edge_batch_size),
+                "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
+            },
+        },
+        explicit_overrides={"loss": {"lambda_contrast": (
+            float(args.lambda_contrast) if args.lambda_contrast is not None else None
+        )}},
+    )
+    config["model"]["modalities_supported"] = ["RNA", secondary_modality]
+    config["model"]["valid_modality_sets"] = [["RNA", secondary_modality]]
     config["encoder"]["dropout"] = float(args.encoder_dropout)
     config["fusion"]["dropout"] = float(args.fusion_dropout)
     config["graphsage"]["dropout"] = float(args.graphsage_dropout)
     config["ot_attention"]["dropout"] = float(args.ot_attention_dropout)
-    config["ot_attention"]["context_gate_enabled"] = not bool(
-        args.disable_context_attention_gate
-    )
     config["decoder"]["dropout"] = float(args.decoder_dropout)
-    if args.lambda_contrast is not None:
-        config["loss"]["lambda_contrast"] = float(args.lambda_contrast)
-    config["uot"]["max_iter"] = int(args.uot_max_iter)
-    config["uot"]["topk"] = int(args.attention_topk)
-    config["uot"]["epsilon_update"] = float(args.uot_epsilon)
-    config["uot"]["tau_a"] = float(args.uot_tau_a)
-    config["uot"]["tau_b"] = float(args.uot_tau_b)
-    config["uot"]["check_every"] = 10
-    config["uot"]["tol"] = 1e-5
-    config["uot"]["update_interval"] = int(args.update_interval)
-    config["graph"]["knn_neighbors_spatial"] = int(args.spatial_knn_k)
-    config["graphsage"]["edge_batch_size"] = int(args.graphsage_edge_batch_size)
-    config["graphsage"]["post_ot_graphsage_scale"] = float(
-        args.post_ot_graphsage_scale
-    )
-    config["reconstruction"]["lambda_by_modality"]["ATAC"] = 1.0
+    config["reconstruction"]["lambda_by_modality"][secondary_modality] = 1.0
     return config
 
 
-def validate_args(args) -> None:
+def validate_args(args, secondary_name: str = "atac") -> None:
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("--device cuda was requested, but torch.cuda.is_available() is False.")
     if args.max_spots_per_section is not None and args.max_spots_per_section <= 0:
@@ -418,7 +401,7 @@ def validate_args(args) -> None:
         "uot_max_iter",
         "graphsage_edge_batch_size",
         "hvg_num",
-        "hvg_num_atac",
+        f"hvg_num_{secondary_name}",
     ]:
         if int(getattr(args, name)) <= 0:
             raise ValueError(f"--{name} must be positive.")
@@ -429,8 +412,46 @@ def validate_args(args) -> None:
         args.log_cuda_memory = True
 
 
-def run_misar_pipeline(args) -> dict[str, Any]:
-    validate_args(args)
+def resolve_run_config(
+    args, *, section_info=None, dataset_name="MISAR-seq",
+    secondary_modality="ATAC", secondary_name="atac",
+):
+    section_info = SECTION_INFO if section_info is None else section_info
+    return describe_run_config(
+        args, make_model_config(args, secondary_modality), dataset=dataset_name,
+        section_order=parse_section_order(args.section_order, section_info),
+        modalities=["RNA", secondary_modality],
+        preprocessing={
+            "n_comps": int(args.n_comps),
+            "hvg_num": int(args.hvg_num),
+            "hvg_num_by_modality": {
+                "RNA": int(args.hvg_num),
+                secondary_modality: int(getattr(args, f"hvg_num_{secondary_name}")),
+            },
+            "target_sum": None,
+            "use_harmony": not args.no_harmony,
+        },
+    )
+
+
+def run_misar_pipeline(
+    args,
+    *,
+    read_pair: Callable[[Path, str], tuple[ad.AnnData, ad.AnnData]] | None = None,
+    section_info: Mapping[str, Mapping[str, str]] | None = None,
+    dataset_name: str = "MISAR-seq",
+    secondary_modality: str = "ATAC",
+    secondary_name: str = "atac",
+    run_config=None,
+) -> dict[str, Any]:
+    validate_args(args, secondary_name)
+    if section_info is None:
+        section_info = SECTION_INFO
+    if run_config is None:
+        run_config = resolve_run_config(
+            args, section_info=section_info, dataset_name=dataset_name,
+            secondary_modality=secondary_modality, secondary_name=secondary_name,
+        )
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
@@ -438,7 +459,7 @@ def run_misar_pipeline(args) -> dict[str, Any]:
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     ensure_dir(output_dir)
-    section_order = parse_section_order(args.section_order)
+    section_order = run_config["section_order"]
     memory_monitor = CudaMemoryMonitor(
         enabled=bool(args.log_cuda_memory),
         output_dir=output_dir,
@@ -454,19 +475,22 @@ def run_misar_pipeline(args) -> dict[str, Any]:
 
     try:
         for section in section_order:
-            rna, atac = read_backed_pair(data_dir, section)
+            if read_pair is None:
+                rna, atac = read_backed_pair(data_dir, section, section_info)
+            else:
+                rna, atac = read_pair(data_dir, section)
             backed_rna[section] = rna
             backed_atac[section] = atac
             rna_info[section], duplicate_tables[section] = make_unique_rna_var_names(section, rna)
-            alignment_summary[section] = validate_rna_atac_alignment(section, rna, atac)
+            alignment_summary[section] = validate_rna_atac_alignment(section, rna, atac, secondary_modality)
         memory_monitor.record("read_raw_h5ad_make_unique_validate_alignment")
 
         shared_genes = common_var_names(backed_rna, section_order, args.max_shared_genes, "RNA genes")
-        shared_peaks = common_var_names(backed_atac, section_order, args.max_shared_peaks, "ATAC peaks")
+        shared_peaks = common_var_names(backed_atac, section_order, args.max_shared_peaks, f"{secondary_modality} peaks")
         for section, table in duplicate_tables.items():
             table.to_csv(output_dir / f"duplicate_gene_summary_{section}.csv", index=False)
         save_list(output_dir / "shared_gene_symbols_make_unique.txt", shared_genes)
-        save_list(output_dir / "shared_atac_peaks.txt", shared_peaks)
+        save_list(output_dir / f"shared_{secondary_name}_peaks.txt", shared_peaks)
         memory_monitor.record(
             "shared_feature_alignment",
             extra={
@@ -504,29 +528,24 @@ def run_misar_pipeline(args) -> dict[str, Any]:
                 for section in section_order
             }
             | {
-                f"atac_{section}_shape": list(atac_mem[section].shape)
+                f"{secondary_name}_{section}_shape": list(atac_mem[section].shape)
                 for section in section_order
             },
         )
 
         obs_metadata_paths = {}
         if args.save_outputs:
-            obs_metadata_paths = save_obs_metadata(output_dir, section_order, rna_mem, obs_indices, backed_rna)
+            obs_metadata_paths = save_obs_metadata(output_dir, section_order, rna_mem, obs_indices, backed_rna, section_info)
 
         data_dict = {
             "RNA": [rna_mem[section] for section in section_order],
-            "ATAC": [atac_mem[section] for section in section_order],
+            secondary_modality: [atac_mem[section] for section in section_order],
         }
         memory_monitor.reset_peak()
         memory_monitor.record("cosie_preprocessing_start")
         feature_dict_raw, spatial_loc_dict_raw, processed_data_dict = load_cosie_style_data(
             data_dict,
-            n_comps=int(args.n_comps),
-            hvg_num=int(args.hvg_num),
-            hvg_num_by_modality={"RNA": int(args.hvg_num), "ATAC": int(args.hvg_num_atac)},
-            target_sum=None,
-            use_harmony=not args.no_harmony,
-            metacell=False,
+            **run_config["preprocessing"],
         )
         preprocessing_generated_keys = list(feature_dict_raw.keys())
         feature_dict = rename_section_keys(feature_dict_raw, section_order)
@@ -539,14 +558,14 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             },
         )
 
-        model_config = make_model_config(args)
+        model_config = run_config["model_config"]
         memory_monitor.reset_peak()
         memory_monitor.record("model_init_start")
         model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
         memory_monitor.record("model_init_end")
         resolved_modality_order = list(model._resolve_modality_order(feature_dict[section_order[0]]))
-        if resolved_modality_order != ["RNA", "ATAC"]:
-            raise ValueError(f"Expected ['RNA', 'ATAC'], got {resolved_modality_order}.")
+        if resolved_modality_order != ["RNA", secondary_modality]:
+            raise ValueError(f"Expected {['RNA', secondary_modality]}, got {resolved_modality_order}.")
 
         memory_monitor.reset_peak()
         memory_monitor.record("initial_ot_prior_start")
@@ -557,17 +576,14 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             raise ValueError("MISAR run requires at least two sections.")
         initial_prior = model.ot_prior[first_pair]
         initial_ot_modalities_used = list(initial_prior.get("modalities_used", []))
-        if args.ot_prior_mode == "dense" and initial_ot_modalities_used != ["RNA", "ATAC"]:
-            raise ValueError(f"Unexpected initial OT modalities_used: {initial_ot_modalities_used}")
-        if args.bidirectional_ot_attention and args.ot_prior_mode == "candidate_sparse":
-            expected_keys = {
-                key
-                for left, right in zip(section_order[:-1], section_order[1:])
-                for key in [(left, right), (right, left)]
-            }
-            actual_keys = set((model.ot_prior or {}).keys())
-            if not expected_keys.issubset(actual_keys):
-                raise ValueError(f"Bidirectional OT prior is missing keys: {expected_keys - actual_keys}")
+        expected_keys = {
+            key
+            for left, right in zip(section_order[:-1], section_order[1:])
+            for key in [(left, right), (right, left)]
+        }
+        actual_keys = set((model.ot_prior or {}).keys())
+        if not expected_keys.issubset(actual_keys):
+            raise ValueError(f"Bidirectional OT prior is missing keys: {expected_keys - actual_keys}")
 
         history: list[dict[str, float]] | None = None
         ot_updates: list[int] = []
@@ -596,7 +612,6 @@ def run_misar_pipeline(args) -> dict[str, Any]:
                     decoder_chunk_size=int(args.decoder_chunk_size),
                     ot_attention_source_chunk_size=int(args.ot_attention_source_chunk_size),
                     cache_spatial_graphs=bool(args.cache_spatial_graphs),
-                    bidirectional_ot_attention=bool(args.bidirectional_ot_attention),
                     checkpoint_ot_attention=bool(args.checkpoint_ot_attention),
                     checkpoint_encoder_fusion=bool(args.checkpoint_encoder_fusion),
                     checkpoint_decoder_chunks=bool(args.checkpoint_decoder_chunks),
@@ -608,7 +623,7 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             section: sorted(modalities.keys())
             for section, modalities in outputs["reconstructions"].items()
         }
-        expected_reconstruction_keys = {section: ["ATAC", "RNA"] for section in section_order}
+        expected_reconstruction_keys = {section: [secondary_modality, "RNA"] for section in section_order}
         if reconstruction_keys != expected_reconstruction_keys:
             raise ValueError(f"Unexpected reconstruction keys: {reconstruction_keys}")
         total_loss_finite = bool(torch.isfinite(outputs["losses"]["total_loss"]).item())
@@ -641,17 +656,18 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             memory_monitor.record("save_ot_prior_topk_end")
 
         summary = {
+            "resolved_config": run_config,
             "mode": "train" if args.train else "dry_run",
-            "dataset": "MISAR-seq",
+            "dataset": dataset_name,
             "input_data_path": str(data_dir),
             "output_dir": str(output_dir),
             "section_names": section_order,
-            "section_info": {section: SECTION_INFO[section] for section in section_order},
+            "section_info": {section: section_info[section] for section in section_order},
             "preprocessing_generated_keys": preprocessing_generated_keys,
             "seed": int(args.seed),
             "n_comps": int(args.n_comps),
             "hvg_num": int(args.hvg_num),
-            "hvg_num_atac": int(args.hvg_num_atac),
+            f"hvg_num_{secondary_name}": int(getattr(args, f"hvg_num_{secondary_name}")),
             "use_harmony": not args.no_harmony,
             "spot_sampling": args.spot_sampling,
             "max_spots_per_section": int(args.max_spots_per_section)
@@ -669,8 +685,8 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             "update_interval": int(args.update_interval),
             "ot_updates": ot_updates,
             "uot_max_iter": int(args.uot_max_iter),
-            "ot_prior_mode": args.ot_prior_mode,
-            "bidirectional_ot_attention": bool(args.bidirectional_ot_attention),
+            "ot_prior_mode": "candidate_sparse",
+            "bidirectional_ot_attention": True,
             "candidate_backend": args.candidate_backend,
             "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
             "candidate_k": int(args.candidate_k),
@@ -680,11 +696,10 @@ def run_misar_pipeline(args) -> dict[str, Any]:
             "faiss_device": args.faiss_device,
             "faiss_train_sample_size": int(args.faiss_train_sample_size),
             "faiss_query_batch_size": int(args.faiss_query_batch_size),
-            "dynamic_candidate_source": args.dynamic_candidate_source,
+            "dynamic_candidate_source": "ot",
             "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
             "pre_post_graphsage_parameter_sharing": False,
             "ot_refresh_embedding_key": "ot_embeddings",
-            "attention_context_gate_enabled": not args.disable_context_attention_gate,
             "uot_epsilon": float(args.uot_epsilon),
             "uot_tau_a": float(args.uot_tau_a),
             "uot_tau_b": float(args.uot_tau_b),
@@ -738,7 +753,7 @@ def run_misar_pipeline(args) -> dict[str, Any]:
                 "run_summary": str(output_dir / "run_summary.json"),
                 "loss_history": str(output_dir / "loss_history.json") if history is not None else None,
                 "shared_gene_symbols_make_unique": str(output_dir / "shared_gene_symbols_make_unique.txt"),
-                "shared_atac_peaks": str(output_dir / "shared_atac_peaks.txt"),
+                f"shared_{secondary_name}_peaks": str(output_dir / f"shared_{secondary_name}_peaks.txt"),
                 "duplicate_gene_summary": {
                     section: str(output_dir / f"duplicate_gene_summary_{section}.csv")
                     for section in section_order
@@ -750,10 +765,10 @@ def run_misar_pipeline(args) -> dict[str, Any]:
                 "ot_prior_topk": ot_prior_topk_files,
             },
             "confirmations": {
-                "modalities_used": ["RNA", "ATAC"],
-                "atac_used_as_true_ATAC": True,
-                "atac_used_as_Protein": False,
-                "atac_used_as_Metabolite": False,
+                "modalities_used": ["RNA", secondary_modality],
+                f"{secondary_name}_used_as_true_{secondary_modality}": True,
+                f"{secondary_name}_used_as_Protein": False,
+                f"{secondary_name}_used_as_Metabolite": False,
                 "fabricated_HE": False,
                 "overwrote_original_h5ad": False,
                 "saved_processed_h5ad": False,
@@ -780,7 +795,7 @@ def run_misar_pipeline(args) -> dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
-    run_misar_pipeline(args)
+    run_misar_pipeline(args, run_config=resolve_run_config(args))
 
 
 if __name__ == "__main__":

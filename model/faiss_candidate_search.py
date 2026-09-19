@@ -12,10 +12,12 @@ from typing import Any
 
 import numpy as np
 
+from .tensor_utils import tensor_to_numpy
+
 
 def _as_float32_array(x: Any) -> np.ndarray:
     if hasattr(x, "detach"):
-        x = x.detach().cpu().numpy()
+        x = tensor_to_numpy(x)
     arr = np.asarray(x, dtype=np.float32)
     if arr.ndim != 2:
         raise ValueError(f"embeddings must be 2D, got shape {arr.shape}.")

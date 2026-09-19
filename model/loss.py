@@ -7,7 +7,6 @@ import sys
 from typing import Mapping
 
 import torch
-import torch.nn.functional as F
 
 
 # Adapted from /home/hujinlan/cosie/COSIE/loss.py::compute_joint
@@ -115,43 +114,3 @@ def compute_pairwise_cosie_crossview_loss(
         total_loss = total_loss + pair_loss
 
     return total_loss, loss_detail_dict
-
-
-def compute_reconstruction_loss(
-    recon_dict_for_one_section: Mapping[str, torch.Tensor],
-    target_feature_dict_for_one_section: Mapping[str, torch.Tensor],
-    lambda_by_modality: Mapping[str, float] | None = None,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Compute MSE reconstruction loss for preprocessed modality embeddings.
-
-    The reconstruction target is the preprocessed feature tensor consumed by
-    the model, such as ``feature_dict[section]["RNA"]``. It is not the raw HE
-    image, raw RNA count matrix, or raw protein/metabolite matrix.
-    """
-
-    if not recon_dict_for_one_section:
-        return torch.tensor(0.0), {}
-
-    first_recon = next(iter(recon_dict_for_one_section.values()))
-    total_loss = torch.zeros((), device=first_recon.device, dtype=first_recon.dtype)
-    detail: dict[str, torch.Tensor] = {}
-    weights = lambda_by_modality or {}
-
-    for modality, recon in recon_dict_for_one_section.items():
-        if modality not in target_feature_dict_for_one_section:
-            raise KeyError(f"Missing reconstruction target for modality {modality}.")
-        target = target_feature_dict_for_one_section[modality]
-        if not isinstance(target, torch.Tensor):
-            target = torch.as_tensor(target, dtype=recon.dtype, device=recon.device)
-        else:
-            target = target.to(device=recon.device, dtype=recon.dtype)
-        if recon.shape != target.shape:
-            raise ValueError(
-                f"Reconstruction shape mismatch for {modality}: "
-                f"recon={tuple(recon.shape)}, target={tuple(target.shape)}."
-            )
-        loss = F.mse_loss(recon, target)
-        detail[modality] = loss
-        total_loss = total_loss + float(weights.get(modality, 1.0)) * loss
-
-    return total_loss, detail

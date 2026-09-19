@@ -13,13 +13,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from model.configure import get_default_preprocess_config
-from model.multimodal_preprocessing import (
+from data_io.datasets import (
     preprocess_multisection_cosie_style,
     summarize_data_dict,
     summarize_feature_dict,
     summarize_spatial_loc_dict,
 )
-from model.utils import ensure_dir
+from data_io.common import ensure_dir
+from training.config import load_json
 
 
 def _none_if_empty(value):
@@ -49,11 +50,6 @@ def parse_args():
     parser.add_argument("--output_summary", default=None)
     parser.add_argument("--dry_run", action="store_true")
     return parser.parse_args()
-
-
-def load_config(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
 
 
 def build_sections_from_args(args):
@@ -114,7 +110,7 @@ def build_summary(result, dry_run):
 
 def main():
     args = parse_args()
-    config_data = load_config(args.config) if args.config else {}
+    config_data = load_json(args.config) if args.config else {}
     sections = config_data.get("sections") if config_data else build_sections_from_args(args)
     if not sections:
         raise ValueError("No sections were provided.")
@@ -128,7 +124,6 @@ def main():
         hvg_num=config_data.get("hvg_num", preprocessing_cfg["hvg_num"]) if config_data else preprocessing_cfg["hvg_num"],
         target_sum=config_data.get("target_sum", preprocessing_cfg["target_sum"]) if config_data else preprocessing_cfg["target_sum"],
         use_harmony=config_data.get("use_harmony", preprocessing_cfg["use_harmony"]) if config_data else preprocessing_cfg["use_harmony"],
-        metacell=config_data.get("metacell", preprocessing_cfg["metacell"]) if config_data else preprocessing_cfg["metacell"],
         config=run_config,
         dry_run=args.dry_run,
     )
