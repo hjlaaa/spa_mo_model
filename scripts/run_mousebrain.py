@@ -41,6 +41,7 @@ from training.fit import (
 )
 from training.config import (
     load_json, resolve_model_config, resolve_option_values, config_source_layers, parse_dataset_args,
+    add_feature_graph_argument,
 )
 
 
@@ -150,6 +151,7 @@ def parse_args(argv=None):
         default=None,
         help="Optional directory for sparse top-k OT prior files; defaults to output_dir/ot_prior_topk.",
     )
+    add_feature_graph_argument(parser)
     return parse_dataset_args(parser, argv, get_dataset_defaults())
 
 
@@ -322,6 +324,7 @@ def build_model_config(
     uot_max_iter: int | None = None,
     spatial_knn_k: int | None = None,
     post_ot_graphsage_scale: float | None = None,
+    feature_graph: bool | None = None,
 ):
     # Preserve MouseBrain entry defaults, then merge model and input layers.
     model_config = get_default_model_config()
@@ -342,6 +345,7 @@ def build_model_config(
         },
         "graph": {"knn_neighbors_spatial": spatial_knn_k},
         "graphsage": {"post_ot_graphsage_scale": post_ot_graphsage_scale},
+        "feature_graph": {"enabled": feature_graph},
     }
     model_config = resolve_model_config(
         base=model_config,
@@ -369,6 +373,7 @@ def resolve_run_config(config: Mapping[str, Any], args):
         uot_max_iter=args.uot_max_iter,
         spatial_knn_k=args.spatial_knn_k,
         post_ot_graphsage_scale=args.post_ot_graphsage_scale,
+        feature_graph=args.feature_graph,
     )
     resolved = argparse.Namespace(**vars(args))
     training = model_config["training"]

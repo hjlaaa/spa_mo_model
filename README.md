@@ -1,6 +1,6 @@
 # spa_mo_model
 
-当前代码以 **v7A** 为唯一模型基线，支持九数据集训练、显式 batch 调度和独立 analysis。单数据集 runner 各解析一次配置，正式训练调用 `training/fit.py`；分析使用 `analysis/` 中的 loader、protocol、clustering、metrics 和 plotting。
+当前代码默认保留 **v7A** 模型基线，支持九数据集训练、显式 batch 调度和独立 analysis。v15C 的可选特征图通过 `feature_graph.enabled` / `--feature_graph` 显式启用；本次六数据集三次重复的配置与后台队列独立放在 [experiments/v15c2](experiments/v15c2/README.md)，实验已启动，实时进度见 `result_v15C-2/_control/status.json`。单数据集 runner 各解析一次配置，正式训练调用 `training/fit.py`；分析使用 `analysis/` 中的 loader、protocol、clustering、metrics 和 plotting。
 
 ## 模型合同
 
@@ -10,9 +10,9 @@ Multimodal Encoder → Fusion → pre-OT Spatial GraphSAGE
 → post-OT Spatial GraphSAGE → Decoder / final embedding
 ```
 
-- 一个 Stage，不使用 feature graph。v7A 研究配置的 post-OT residual scale 为 0.5，保留普通参数覆盖能力。底层/部分裸 runner 默认仍为 1.0，P8 不修改这些已验收默认；以下研究命令显式传入 0.5。
+- 一个 Stage，默认不使用 feature graph。可选的切片内特征 KNN 与组合边权在 `model/feature_graph.py`；启用时仅影响 pre-OT GraphSAGE。v7A 研究配置的 post-OT residual scale 为 0.5，保留普通参数覆盖能力。底层/部分裸 runner 默认仍为 1.0；以下研究命令显式传入 0.5。
 - 启用 OT 时只使用双向 candidate-sparse UOT；保留 FAISS IVF、Flat 和显式 blockwise backend。合法 noOT、单模态、H&E/UNI 输入仍支持。
-- refresh source 为 `ot`，cost 为 0.8 semantic + 0.2 self-excluded spatial context。默认第 100 epoch 首刷，间隔 20；在 optimizer step 之后，以 eval/no_grad 单遍 forward 使用旧 prior 产生 OT embedding，再整体替换 prior。
+- refresh source 为 `ot`，cost 为 0.8 semantic + 0.2 self-excluded spatial context。默认第 100 epoch 首刷，间隔 20；在 optimizer step 之后，以 eval/no_grad 单遍 forward 使用旧 prior 产生 OT embedding，再整体替换 prior。启用 feature graph 时，由 `training/graph_refresh.py` 执行两遍前向：先取 fused 表征更新特征图，再使用新图计算用于 UOT 的表征；前 99 轮特征图为空。
 - dataset 的 precision、K、candidate、chunk、checkpoint、epoch 和 preprocessing 设置各自保留。MouseBrain 保留 FP32 及 runner 内 epoch0 train-mode/no_grad dry forward；MISAR 为 amp none。其余当前主链使用各自已有 BF16 设置。
 - 配置优先级：基础 defaults < preset（如适用）< dataset config < 显式 CLI。权威解析工具为 `training/config.py`，dataset defaults 在各 runner 中。
 
@@ -29,7 +29,7 @@ Multimodal Encoder → Fusion → pre-OT Spatial GraphSAGE
 | MISAR-seq | `misar` | `scripts/run_misar_seq.py` | `misar_seq` / `requested` |
 | SPATCH | `spatch` | `scripts/run_spatch.py` | `spatch` / `requested` 或 `comparison` |
 | CRC Stereo-CITE-seq | `crc` | `scripts/run_crc_stereocite.py` | `crc_stereocite` / `comparison` |
-| Human Lymph Node | `human_lymph_node` | `scripts/run_human_lymph_node.py` | `human_lymph_node` / `comparison` |
+| Human Lymph Node | `human_lymph_node` | `scripts/run_human_lymph_node.py` | `human_lymph_node` / `requested` 或 `comparison` |
 | Mouse Spleen | `mouse_spleen` | `scripts/run_mouse_spleen.py` | `mouse_spleen` / `requested` |
 | Mouse Thymus | `mouse_thymus` | `scripts/run_mouse_thymus.py` | `mouse_thymus` / `requested` |
 | Simulation | `simulation` | `scripts/run_simulation.py` | `simulation` / `requested` |
@@ -68,6 +68,8 @@ python scripts/run_preprocessing.py --help
 ## Analysis
 
 当前入口为 `scripts/evaluate.py`。`--run-dir` 只读已有模型结果，`--data-dir` 指向必要 metadata/truth 来源，`--output-dir` 必须是独立的新分析位置；不根据 `result_*` 名称猜版本或算法。
+
+新实验若需要将独立分析目录放在 `result_*` 根目录内，可显式传 `--writable-result-root /path/to/new/result_name` 授权该根目录。默认不授权；历史结果保护与输入/输出分离检查继续有效。v15C-2 队列只指定本次 `result_v15C-2`。
 
 ```bash
 python scripts/evaluate.py --help

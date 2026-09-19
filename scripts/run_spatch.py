@@ -24,7 +24,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.config import resolve_model_config, parse_dataset_args, describe_run_config
+from training.config import (
+    resolve_model_config, parse_dataset_args, describe_run_config,
+    add_feature_graph_argument, feature_graph_overrides,
+)
 from data_io.preprocessing import load_cosie_style_data
 from model.stage_model import StageMultiModalModel
 from training.fit import (
@@ -170,6 +173,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--overwrite", action=argparse.BooleanOptionalAction, default=None)
+    add_feature_graph_argument(parser)
     return parse_dataset_args(parser, argv, get_dataset_defaults())
 
 
@@ -825,7 +829,7 @@ def build_model_config(args):
             "edge_batch_size": args.graphsage_edge_batch_size,
             "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
         },
-    })
+    }, explicit_overrides=feature_graph_overrides(args))
     return config
 
 

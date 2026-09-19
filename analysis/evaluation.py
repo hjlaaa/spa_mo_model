@@ -149,7 +149,7 @@ def evaluate(args):
     if per_section and args.preprocessing != "standardized_embedding":
         raise ValueError("The reference joint_per_section protocol uses joint standardized labels")
     if args.no_plots and not (args.protocol == "requested" and args.dataset in protocols.SPECS):
-        raise ValueError("--no-plots is supported by the five generic requested workflows only")
+        raise ValueError("--no-plots is supported by generic requested workflows only")
     if args.plot_k is not None and not (args.protocol == "embryo-reference" or
             (args.protocol == "requested" and args.dataset in protocols.SPECS) or
             (args.protocol == "comparison" and args.dataset == "spatch")):
@@ -212,7 +212,7 @@ def evaluate(args):
                                          run_dir=run_dir, protocol_name=args.protocol)
     if args.protocol == "requested":
         if args.dataset not in protocols.SPECS:
-            raise ValueError("Use comparison for CRC/HLN, or embryo-reference for Human Embryo; protocols are not interchangeable")
+            raise ValueError("Use comparison for CRC, or embryo-reference for Human Embryo; protocols are not interchangeable")
         spec = protocols.SPECS[args.dataset]
         spec = replace(spec,
             joint_ks=tuple(args.k or spec.joint_ks) if "joint" in modes else (),
@@ -301,4 +301,3 @@ def evaluate_comparison(data, args, run_dir, output, modes, per_section):
         raise ValueError("This entry supports requested for this dataset; its cross-method comparison CLI remains documented")
     return {"dataset": dataset, "protocol": "comparison", "analysis": str(output / scheme),
             "joint_per_section": "not_applicable" if dataset != "spatch" and per_section else None}
-

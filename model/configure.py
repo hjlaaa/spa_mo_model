@@ -148,6 +148,9 @@ def get_default_model_config():
         "graph": {
             "knn_neighbors_spatial": 5,
         },
+        "feature_graph": {
+            "enabled": False,
+        },
         "encoder": {
             "hidden_dims": [256, 128],
             "output_dim": 128,

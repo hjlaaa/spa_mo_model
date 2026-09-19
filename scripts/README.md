@@ -26,6 +26,8 @@
 
 [evaluate.py](evaluate.py) 是单 run 的正式分析入口，显式指定 dataset、run_dir、output_dir、protocol 和 scope。不同数据集的科研协议保持独立。
 
+Human Lymph Node 也支持历史 requested 协议（K=8/10/12、joint/independent、无生物学监督标签）。新实验若把独立分析目录放在 `result_*` 根目录中，需要显式指定 `--writable-result-root`；默认保持历史结果写保护。
+
 ```bash
 python scripts/evaluate.py --help
 python scripts/evaluate.py --dataset simulation --run-dir /path/to/run --output-dir /path/to/new_analysis --protocol requested --scope joint_per_section --k 5 8 10 12 --assignments-dir /path/to/joint_assignments
@@ -118,6 +120,8 @@ method 支持 spa / cosie / present / mofa / spamosaic。spa 的 paths 如上；
 该工作流复用已存 scaler，以 joint A1+D1 和 independent A1 两种空间运行 K=2…12、seed=0、n_init=20、max_iter=300；检查保留K=5/8/10/12的标签重现。输出 ARI/NMI/Homogeneity/Completeness/V-measure/label-ASW/scaled label-ASW。这不改变 canonical HLN 无 ground-truth 的默认合同。`--dry-run` 会读取、计算、校验，但不写结果；它不是免计算模式。输出须全新，拒绝覆盖已有结果。
 
 ## Layout and protection
+
+本次 v15C-2 的后台队列、固定配置与状态管理独立位于 [experiments/v15c2](../experiments/v15c2/README.md)，不放入这里的长期 CLI 或核心模块。六数据集训练入口通过共享参数支持可选 `--feature_graph`，默认关闭。
 
 ```text
 scripts/

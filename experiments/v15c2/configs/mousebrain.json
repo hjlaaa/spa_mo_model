@@ -1,0 +1,44 @@
+{
+  "dataset_name": "MouseBrain",
+  "modalities": ["HE", "RNA", "Metabolite"],
+  "section_order": ["s1", "s2", "s3"],
+  "sections": [
+    {
+      "section_id": "s1",
+      "source_section": "SectionA",
+      "rna_input": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionA/adata_RNA.h5ad",
+      "metabolite_input": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionA/adata_meta.h5ad"
+    },
+    {
+      "section_id": "s2",
+      "source_section": "SectionB",
+      "rna_input": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionB/adata_RNA.h5ad",
+      "metabolite_input": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionB/adata_meta.h5ad"
+    },
+    {
+      "section_id": "s3",
+      "source_section": "SectionC",
+      "rna_input": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionC/adata_RNA.h5ad",
+      "metabolite_input": "/home/hujinlan/spa_mo_model/data/dataset_MouseBrain/dataset_MouseBrain_SectionC/adata_meta.h5ad"
+    }
+  ],
+  "preprocessing": {
+    "n_comps": 50,
+    "use_harmony": true,
+    "spatial_key": "spatial",
+    "uni_feature_key": "uni_feature",
+    "rna_gene_id_key": "gene_ids",
+    "hvg_num_by_modality": {
+      "RNA": 3000,
+      "Metabolite": null
+    }
+  },
+  "training": {
+    "epochs": 5,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "device": "cpu",
+    "max_spots_per_section": null,
+    "output_dir": "/home/hujinlan/spa_mo_model/results/mousebrain_test"
+  }
+}

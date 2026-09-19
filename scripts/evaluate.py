@@ -17,6 +17,8 @@ def parse_args(argv=None):
     parser.add_argument('--dataset', required=True, choices=DATASETS)
     parser.add_argument('--run-dir', '--input-dir', dest='run_dir', required=True, type=Path)
     parser.add_argument('--output-dir', required=True, type=Path)
+    parser.add_argument('--writable-result-root', type=Path,
+                        help='Explicit new experiment result_* root; permits separate analysis outputs inside that root.')
     parser.add_argument('--protocol', required=True, choices=['requested','comparison','embryo-reference','embryo-per-section','umap-rerender'])
     parser.add_argument('--scope', nargs='+', choices=tuple(SCOPES), default=['joint','independent'])
     parser.add_argument('--joint-per-section', action='store_true', help='Evaluate existing joint assignments per section; never recluster or average sections.')
@@ -30,7 +32,7 @@ def parse_args(argv=None):
     parser.add_argument('--model-version', default='v7A', help='Explicit source label, never inferred from directory names.')
     parser.add_argument('--method-name', help='Explicit method display name; defaults to the retained workflow label.')
     parser.add_argument('--post-ot-graphsage-scale', type=float, default=.5)
-    parser.add_argument('--no-plots', action='store_true', help='Skip rendering for the five generic requested workflows.')
+    parser.add_argument('--no-plots', action='store_true', help='Skip rendering for generic requested workflows.')
     parser.add_argument('--skip-hierarchy', action='store_true')
     parser.add_argument('--plot-seed', type=int, help='Explicit Embryo per-section rendering seed; default is its existing seed 42.')
     parser.add_argument('--maximum-per-section', type=int, default=50000)
@@ -48,7 +50,9 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     from analysis.evaluation import evaluate
-    result = evaluate(args)
+    from analysis.cache import writable_result_root
+    with writable_result_root(args.writable_result_root):
+        result = evaluate(args)
     print(json.dumps(result, indent=2, default=str, ensure_ascii=False))
     return result
 

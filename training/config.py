@@ -14,6 +14,19 @@ from typing import Any, Mapping
 from model.configure import get_default_model_config, reject_unsupported_model_config
 
 
+def add_feature_graph_argument(parser):
+    """Shared optional model capability; experiment choices stay outside core."""
+    import argparse
+    parser.add_argument(
+        "--feature_graph", action=argparse.BooleanOptionalAction, default=None,
+        help="Enable section-local feature neighbours before OT; refresh from epoch 100.",
+    )
+
+
+def feature_graph_overrides(args):
+    return {"feature_graph": {"enabled": getattr(args, "feature_graph", None)}}
+
+
 def load_json(path: str | Path):
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)

@@ -22,7 +22,10 @@ for path in [PROJECT_ROOT, SCRIPT_DIR]:
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from training.config import resolve_model_config, parse_dataset_args, describe_run_config
+from training.config import (
+    resolve_model_config, parse_dataset_args, describe_run_config,
+    add_feature_graph_argument, feature_graph_overrides,
+)
 from data_io.misar import common_var_names, make_unique_rna_var_names, read_backed_pair
 from data_io.preprocessing import load_cosie_style_data
 from model.stage_model import StageMultiModalModel
@@ -196,6 +199,7 @@ def parse_args(
     parser.add_argument("--hvg_num", type=int, default=None, help="HVG count for RNA.")
     parser.add_argument(f"--hvg_num_{secondary_name}", type=int, default=None, help=f"Highly variable peak count for {secondary_modality}.")
     parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, default=None)
+    add_feature_graph_argument(parser)
     return parse_dataset_args(parser, argv, {**get_dataset_defaults(dataset_name=dataset_name, secondary_name=secondary_name), **(defaults or {})})
 
 
@@ -361,7 +365,7 @@ def make_model_config(args, secondary_modality: str = "ATAC") -> dict[str, Any]:
                 "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             },
         },
-        explicit_overrides={"loss": {"lambda_contrast": (
+        explicit_overrides={**feature_graph_overrides(args), "loss": {"lambda_contrast": (
             float(args.lambda_contrast) if args.lambda_contrast is not None else None
         )}},
     )

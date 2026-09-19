@@ -25,7 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from training.config import resolve_model_config, parse_dataset_args, describe_run_config
+from training.config import (
+    resolve_model_config, parse_dataset_args, describe_run_config,
+    add_feature_graph_argument, feature_graph_overrides,
+)
 from training.fit import (
     json_safe,
     bytes_to_gib,
@@ -293,6 +296,7 @@ def parse_args(
     parser.add_argument("--hvg_num", type=int, default=None)
     parser.add_argument("--uot_max_iter", type=int, default=None)
     parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, help="Disable Harmony during preprocessing.", default=None)
+    add_feature_graph_argument(parser)
     return parse_dataset_args(parser, argv, {**get_dataset_defaults(), **(defaults or {})})
 
 
@@ -524,7 +528,7 @@ def build_model_config(args):
                 "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             },
         },
-        explicit_overrides={"loss": {"lambda_contrast": (
+        explicit_overrides={**feature_graph_overrides(args), "loss": {"lambda_contrast": (
             float(args.lambda_contrast) if args.lambda_contrast is not None else None
         )}},
     )

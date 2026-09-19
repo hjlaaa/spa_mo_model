@@ -10,6 +10,7 @@ import gc
 import json
 import time
 from contextlib import nullcontext
+from functools import partial
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -17,9 +18,12 @@ import numpy as np
 import torch
 
 from model.stage_model import StageMultiModalModel, should_update_ot
+from .graph_refresh import prepare_refresh_outputs
 
 
 def json_safe(value: Any):
+    if isinstance(value, Path):
+        return str(value)
     if isinstance(value, torch.Tensor):
         if value.ndim == 0:
             return float(value.detach().cpu())
@@ -304,6 +308,7 @@ def iter_fit_model(
     scaler = make_grad_scaler(args)
     history: list[dict[str, float]] = []
     ot_updates: list[int] = []
+    feature_graph_refreshes: list[dict[str, Any]] = []
     default_lambda = float(model.config["loss"]["lambda_contrast"])
     for epoch in range(1, epochs + 1):
         if record_elapsed_time:
@@ -450,7 +455,8 @@ def iter_fit_model(
                 if memory_monitor is not None:
                     memory_monitor.reset_peak()
                     memory_monitor.record("ot_update_forward_start", epoch=epoch)
-                eval_outputs = run_one_forward(
+                refresh_forward = partial(
+                    run_one_forward,
                     model,
                     feature_dict,
                     spatial_loc_dict,
@@ -471,11 +477,20 @@ def iter_fit_model(
                         "ot_update_forward",
                     ),
                 )
+                eval_outputs, feature_refresh = prepare_refresh_outputs(
+                    model, refresh_forward, epoch=epoch,
+                )
                 if memory_monitor is not None:
                     memory_monitor.record("ot_update_forward_end", epoch=epoch)
                     memory_monitor.reset_peak()
                     memory_monitor.record("ot_update_prior_start", epoch=epoch)
                 update_model_ot_prior(model, eval_outputs, section_order, args)
+                if feature_refresh is not None:
+                    feature_graph_refreshes.append(feature_refresh)
+                    if getattr(args, "output_dir", None):
+                        trace = Path(args.output_dir) / "feature_graph_refresh.json"
+                        trace.parent.mkdir(parents=True, exist_ok=True)
+                        trace.write_text(json.dumps(feature_graph_refreshes, indent=2), encoding="utf-8")
                 if memory_monitor is not None:
                     memory_monitor.record("ot_update_prior_end", epoch=epoch)
                 if clear_step_state:
@@ -521,4 +536,6 @@ def iter_fit_model(
         )
         if memory_monitor is not None:
             memory_monitor.record("final_eval_end", epoch=epochs)
+    if model.feature_graph.enabled:
+        final_outputs["feature_graph_refreshes"] = feature_graph_refreshes
     yield True, history, final_outputs, ot_updates
