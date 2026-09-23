@@ -22,7 +22,7 @@ import pandas as pd
 import scipy.sparse as sp
 import torch
 
-from .preprocessing import load_cosie_style_data
+from .preprocessing import load_cosie_style_data, spatial_enhance_features
 from .spatch_preparation import (
     SECTIONS, FILES, CACHE_SCHEMA_VERSION, CACHE_METADATA_FILES,
     canonical_ids, sha256_file, cache_parameters,
@@ -385,6 +385,14 @@ def preprocess_modalities_sequentially(
         del modality_inputs, feature_raw, spatial_raw, modality_features, modality_spatial
         gc.collect()
         observe(args.output_dir, f"{modality}_processed_and_released")
+    if getattr(args, "spatial_enhancement", False):
+        feature_dict = spatial_enhance_features(
+            feature_dict, spatial_dict,
+            k=args.spatial_enhancement_k,
+            weight=args.spatial_enhancement_weight,
+            include_self=args.spatial_enhancement_include_self,
+        )
+        observe(args.output_dir, "spatial_enhancement_complete")
     return feature_dict, spatial_dict, None
 
 

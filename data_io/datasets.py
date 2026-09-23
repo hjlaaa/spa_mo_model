@@ -395,6 +395,7 @@ def preprocess_multisection_cosie_style(
             hvg_num_by_modality=hvg_num_by_modality,
             target_sum=target_sum,
             use_harmony=use_harmony,
+            spatial_enhancement=_config_value(cfg, "spatial_enhancement"),
         )
         feature_dict = restore_section_keys(feature_dict, section_ids)
         spatial_loc_dict = restore_section_keys(spatial_loc_dict, section_ids)

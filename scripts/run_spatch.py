@@ -118,6 +118,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="Unsupported legacy switch; use explicit --input_mode raw to prepare new inputs.",
         default=None,
     )
+    parser.add_argument("--spatial_enhancement", action=argparse.BooleanOptionalAction,
+                        default=False, help="Raw mode: add spatial KNN sums to PCA/Harmony features.")
+    parser.add_argument("--spatial_enhancement_k", type=int, default=10)
+    parser.add_argument("--spatial_enhancement_weight", type=float, default=0.2)
+    parser.add_argument("--spatial_enhancement_include_self",
+                        action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--overwrite", action=argparse.BooleanOptionalAction, default=None)
     return parse_dataset_args(parser, argv, get_dataset_defaults())

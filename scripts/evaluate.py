@@ -49,6 +49,15 @@ def main(argv=None):
     args = parse_args(argv)
     from analysis.evaluation import evaluate
     result = evaluate(args)
+    if args.protocol == 'requested' and any(
+        scope in ('joint', 'independent') for scope in args.scope
+    ):
+        from analysis.artifacts import requested_analysis_artifacts
+        requested_analysis_artifacts(
+            args.dataset, args.output_dir, model_version=args.model_version,
+            post_ot_graphsage_scale=args.post_ot_graphsage_scale,
+            k_values=args.k, require_plots=not args.no_plots,
+        )
     print(json.dumps(result, indent=2, default=str, ensure_ascii=False))
     return result
 

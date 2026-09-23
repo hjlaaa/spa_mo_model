@@ -7,12 +7,65 @@ the new project depend on ``/home/hujinlan/cosie`` at runtime.
 from __future__ import annotations
 
 import gc
+from collections.abc import Mapping
+from numbers import Real
 
 import numpy as np
 import scipy
 import scanpy as sc
 import anndata as ad
 import torch
+from sklearn.neighbors import NearestNeighbors
+
+
+def spatial_enhance_features(feature_dict, spatial_loc_dict, *, k=10, weight=0.2,
+                             include_self=False):
+    """Replace each modality with its spatial KNN enhanced features per section.
+
+    k counts non-self neighbors. include_self adds a self edge to that sum;
+    the original feature is always retained by the residual addition.
+    """
+    if isinstance(k, bool) or not isinstance(k, (int, np.integer)) or k < 1:
+        raise ValueError("spatial_enhancement.k must be a positive integer")
+    if isinstance(weight, bool) or not isinstance(weight, Real) or not np.isfinite(weight):
+        raise ValueError("spatial_enhancement.weight must be finite")
+    if not isinstance(include_self, bool):
+        raise ValueError("spatial_enhancement.include_self must be boolean")
+
+    for section, modalities in feature_dict.items():
+        if section not in spatial_loc_dict:
+            raise ValueError(f"Missing spatial coordinates for section {section}")
+        coords = np.asarray(spatial_loc_dict[section], dtype=np.float32)
+        if coords.ndim != 2 or 0 in coords.shape or not np.isfinite(coords).all():
+            raise ValueError(f"Invalid spatial coordinates for section {section}")
+        n_cells = coords.shape[0]
+        n_neighbors = min(int(k), n_cells - 1)
+        if n_neighbors:
+            # X=None excludes the fitted point by row index, including for
+            # spots with identical coordinates.
+            indices = NearestNeighbors(n_neighbors=n_neighbors).fit(coords).kneighbors(
+                X=None, return_distance=False
+            )
+            rows = np.repeat(np.arange(n_cells), n_neighbors)
+            cols = indices.reshape(-1)
+            data = np.ones(cols.size, dtype=np.float32)
+            graph = scipy.sparse.csr_matrix((data, (rows, cols)), shape=(n_cells, n_cells))
+        else:
+            graph = scipy.sparse.csr_matrix((n_cells, n_cells), dtype=np.float32)
+        if include_self:
+            graph = graph + scipy.sparse.eye(n_cells, format="csr", dtype=np.float32)
+
+        for modality, feature in modalities.items():
+            if feature.ndim != 2 or feature.shape[0] != n_cells:
+                raise ValueError(
+                    f"{section}/{modality}: feature rows do not match spatial coordinates"
+                )
+            values = feature.detach().cpu().numpy()
+            output = values + weight * (graph @ values)
+            modalities[modality] = torch.from_numpy(
+                np.ascontiguousarray(output, dtype=np.float32)
+            )
+    return feature_dict
 
 
 def canonicalize_modality(modality: str) -> str:
@@ -133,6 +186,7 @@ def load_data(
     hvg_num_by_modality=None,
     memory_efficient=False,
     retain_processed=True,
+    spatial_enhancement=None,
 ):
     """
     Process COSIE-style ``data_dict`` into model-ready feature tensors.
@@ -308,6 +362,24 @@ def load_data(
                     "across different modalities!"
                 )
 
+    if spatial_enhancement is not None:
+        if not isinstance(spatial_enhancement, Mapping):
+            raise ValueError("spatial_enhancement must be a mapping")
+        unknown = set(spatial_enhancement) - {"enabled", "k", "weight", "include_self"}
+        if unknown:
+            raise ValueError(f"Unknown spatial_enhancement options: {sorted(unknown)}")
+        enabled = spatial_enhancement.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("spatial_enhancement.enabled must be boolean")
+        if enabled:
+            feature_dict = spatial_enhance_features(
+                feature_dict,
+                spatial_loc_dict,
+                k=spatial_enhancement.get("k", 10),
+                weight=spatial_enhancement.get("weight", 0.2),
+                include_self=spatial_enhancement.get("include_self", False),
+            )
+
     return feature_dict, spatial_loc_dict, data_dict if retain_processed else None
 
 
@@ -340,6 +412,7 @@ def load_cosie_style_data(
     hvg_num_by_modality=None,
     memory_efficient=False,
     retain_processed=True,
+    spatial_enhancement=None,
 ):
     """Alias for migrated COSIE ``load_data`` with canonical modality names."""
 
@@ -352,4 +425,5 @@ def load_cosie_style_data(
         hvg_num_by_modality=hvg_num_by_modality,
         memory_efficient=memory_efficient,
         retain_processed=retain_processed,
+        spatial_enhancement=spatial_enhancement,
     )

@@ -156,6 +156,7 @@ def run_mousebrain_training_task(run_config, prepared, *, lambda_schedule):
         "max_spots_per_section": max_spots,
         "use_harmony": config.get("preprocessing", {}).get("use_harmony", True),
         "hvg_num_by_modality": config.get("preprocessing", {}).get("hvg_num_by_modality"),
+        "spatial_enhancement": config.get("preprocessing", {}).get("spatial_enhancement"),
         "lambda_contrast": model_config["loss"]["lambda_contrast"],
         "lambda_contrast_schedule": args.lambda_contrast_schedule,
         "device": model_config["training"]["device"],

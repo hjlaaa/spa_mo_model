@@ -195,6 +195,13 @@ def parse_args(
     parser.add_argument("--n_comps", type=int, default=None)
     parser.add_argument("--hvg_num", type=int, default=None)
     parser.add_argument("--uot_max_iter", type=int, default=None)
+    parser.add_argument("--spatial_enhancement", action=argparse.BooleanOptionalAction,
+                        default=False, help="Add spatial KNN neighbor feature sums after PCA/Harmony.")
+    parser.add_argument("--spatial_enhancement_k", type=int, default=10,
+                        help="Number of non-self spatial neighbors for preprocessing.")
+    parser.add_argument("--spatial_enhancement_weight", type=float, default=0.2)
+    parser.add_argument("--spatial_enhancement_include_self",
+                        action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--no_harmony", action=argparse.BooleanOptionalAction, help="Disable Harmony during preprocessing.", default=None)
     return parse_dataset_args(parser, argv, {**get_dataset_defaults(), **(defaults or {})})
 
@@ -234,5 +241,11 @@ def resolve_run_config(args, *, samples=None, dataset_name="CRC Stereo-CITE-seq"
             "hvg_num_by_modality": {"RNA": args.hvg_num, "Protein": None},
             "target_sum": None,
             "use_harmony": not args.no_harmony,
+            "spatial_enhancement": {
+                "enabled": args.spatial_enhancement,
+                "k": args.spatial_enhancement_k,
+                "weight": args.spatial_enhancement_weight,
+                "include_self": args.spatial_enhancement_include_self,
+            },
         },
     )

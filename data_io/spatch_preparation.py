@@ -52,7 +52,7 @@ def sha256_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
 
 def cache_parameters(args: argparse.Namespace) -> dict[str, object]:
     """Historical schema-1 build fields; retain_processed is provenance at load time."""
-    return {
+    params = {
         "sections": list(SECTIONS),
         "modalities": ["RNA", "Protein", "HE"],
         "n_comps": int(args.n_comps),
@@ -65,6 +65,14 @@ def cache_parameters(args: argparse.Namespace) -> dict[str, object]:
         "retain_processed": False,
         "dapi_removed": True,
     }
+    if getattr(args, "spatial_enhancement", False):
+        params["spatial_enhancement"] = {
+            "enabled": True,
+            "k": getattr(args, "spatial_enhancement_k", 10),
+            "weight": getattr(args, "spatial_enhancement_weight", 0.2),
+            "include_self": getattr(args, "spatial_enhancement_include_self", False),
+        }
+    return params
 
 
 def validate_cache_input_identity(
@@ -163,6 +171,10 @@ def load_preprocessed_cache(
     if not isinstance(parameters, dict) or set(parameters) - set(expected_parameters):
         raise ValueError("SPATCH cache has unsupported preprocessing parameter fields.")
     for key, expected in expected_parameters.items():
+        if key == "spatial_enhancement" and key not in parameters:
+            # An unenhanced schema-1 cache can be enhanced in memory after
+            # strict validation; the stored arrays remain unchanged.
+            continue
         if key != "retain_processed" and (key not in parameters or parameters[key] != expected):
             raise ValueError(f"SPATCH cache parameter {key} differs: {parameters.get(key)!r} != {expected!r}.")
     if args.n_comps <= 0:
@@ -316,6 +328,15 @@ def prepare_dataset(spec: SpatchCacheInput | SpatchRawInput) -> PreparedDataset:
     features, spatial, alignment, cache_info = load_preprocessed_cache(
         spec.cache_dir, spec.data_dir, spec.output_dir, spec.args
     )
+    if getattr(spec.args, "spatial_enhancement", False):
+        settings = cache_parameters(spec.args)["spatial_enhancement"]
+        if "spatial_enhancement" not in cache_info["historical_preprocessing_parameters"]:
+            from .preprocessing import spatial_enhance_features
+            spatial_enhance_features(
+                features, spatial, k=settings["k"], weight=settings["weight"],
+                include_self=settings["include_self"],
+            )
+            cache_info["runtime_spatial_enhancement"] = settings
     metadata_path = str(Path(cache_info["path"]) / "spot_metadata.csv.gz")
     metadata_output_path = str(spec.output_dir.resolve() / "spot_metadata.csv.gz")
     identity = {}

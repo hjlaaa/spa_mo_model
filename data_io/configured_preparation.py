@@ -90,6 +90,7 @@ def preprocess_mousebrain(config: Mapping[str, Any], max_spots: int | None):
         hvg_num_by_modality=preprocessing.get("hvg_num_by_modality"),
         target_sum=preprocessing.get("target_sum"),
         use_harmony=preprocessing.get("use_harmony", True),
+        spatial_enhancement=preprocessing.get("spatial_enhancement"),
     )
     section_ids = [result["section_id"] for result in section_results]
     feature_dict = restore_section_keys(feature_dict, section_ids)

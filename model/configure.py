@@ -103,6 +103,7 @@ def get_default_preprocess_config():
             "use_harmony": DEFAULT_USE_HARMONY,
             "spatial_key": DEFAULT_SPATIAL_KEY,
             "uni_feature_key": DEFAULT_UNI_FEATURE_KEY,
+            "spatial_enhancement": {"enabled": False, "k": 10, "weight": 0.2, "include_self": False},
         },
         "he_image": {
             "batch_size": 128,

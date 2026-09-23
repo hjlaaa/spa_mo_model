@@ -100,6 +100,18 @@ defaults/base < preset/model_config < dataset/input_config < explicit CLI
 
 batch没有自动注入scale；evaluate的scale默认0.5是来源说明，不是训练override。generic smoke保留 `args.epochs or 3`，所以该模式显式0仍得到3；SPATCH固定执行设置、Embryo RNA-only/crossview=0等是已有模式约束，不声称任意CLI都能覆盖。旧help中Stage版本或“checkpoint”字样不代表另一模型入口或exact resume能力。
 
+### 可选空间特征增强
+
+COSIE式原始输入预处理可在 PCA/Harmony 后、模型读取 feature_dict 前启用逐切片空间 KNN 聚合；默认关闭。配置示例（MouseBrain 和通用 raw JSON 放在 preprocessing 下）：
+
+```json
+{"preprocessing": {"spatial_enhancement": {"enabled": true, "k": 10, "weight": 0.2, "include_self": false}}}
+```
+
+对每个切片、每个模态，增强后的特征为 X + weight × A X。A 的每行包含至多 k 个非自身空间近邻，边权为 1；include_self=true 时额外加入自环。邻居特征求和，不按距离加权或按邻居数归一化。spot 少于 k+1 个时使用全部可用非自身邻居。增强后的张量写入模型输入 feature_dict；processed_data_dict 中原 PCA/Harmony obsm 保留原值。该开关作用于执行 COSIE式预处理的原始输入路径；SPATCH 可在只读复用旧 cache 后对载入的模型输入特征执行同一增强，原 cache 文件保持不变。generic model-ready bundle 和 Embryo HESTA 输入不会重新预处理。
+
+paired/multisection 入口可用 --spatial_enhancement、--spatial_enhancement_k、--spatial_enhancement_weight、--spatial_enhancement_include_self；SPATCH raw/reuse 均可用同名选项：raw 的新 cache manifest 记录该步骤；reuse 在严格校验旧 cache 后于内存中执行增强，若 cache 已记录相同增强参数则避免重复应用。模型图的 spatial_knn_k 与本预处理 k 是两个独立参数。
+
 ## 5. 训练和analysis的特有行为
 
 CRC dry为train-mode/no_grad；MISAR dry为eval/no_grad。MouseBrain正常训练和dry都先执行train-mode/no_grad epoch0，保持dropout/RNG，不能删除或移入fit。Embryo noOT跳过initial prior但保留既有refresh/eval记录；SPATCH raw/reuse准备及GPU准入在task之前。generic periodic由iter_fit_model的yield触发，不新增forward，不导出optimizer/scaler/RNG状态；final eval与periodic语义不同。
