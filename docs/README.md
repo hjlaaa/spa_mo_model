@@ -4,6 +4,9 @@
 
 ## 当前阅读入口
 
+- [当前架构与输入/配置合同](CURRENT_ARCHITECTURE.md)：当前生产能力；与以下历史归档分开。
+- [U系列权威计划](refactoring/CORE_INTERFACE_REFACTOR_PLAN.md)：各批边界与追加退出记录；按最新记录判断执行状态。
+
 - [根 README](../README.md)：当前项目结构、正式运行命令和使用边界。
 - [scripts/README.md](../scripts/README.md)：正式 CLI 与输入格式。
 - [handoff.md](../handoff.md)：工作交接入口，保留在根目录。
@@ -16,7 +19,7 @@
 |---|---:|---|
 | [experiments_early/](experiments_early/) | 22 | 原 docs 中的早期模型验证、方法阅读、数据适配和初期实验记录，含 1 份 PDF |
 | [experiments_later/](experiments_later/) | 15 | 原根目录中的后续比较、损失与结构实验、优化建议和实施方案 |
-| [refactoring/](refactoring/) | 3 | 原根目录中的重构审计、计划和用户决策 |
+| [refactoring/](refactoring/) | 原归档3份，另有U系列计划 | 原根目录中的重构审计、计划和用户决策；新增计划不改写原历史记录 |
 
 上述分组保留原来两批实验文档的来源，不声称每篇文档都具有严格连续的日期。旧模型版本、命令、源码位置、数值和结论均按当时记录保留；它们不自动构成当前实现说明，也不表示其中的建议已实施。以“report”或“plan”命名的记录，仍须结合其自身状态阅读。
 

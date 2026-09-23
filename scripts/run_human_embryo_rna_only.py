@@ -23,13 +23,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from training.entry_defaults import embryo_defaults as _entry_defaults
 from training.config import resolve_model_config, parse_dataset_args, describe_run_config
 from model.stage_model import StageMultiModalModel
 from data_io.hesta import (
     audit_hesta_files,
-    load_preprocessed_manifest,
-    preprocess_hesta_rna,
     resolve_input_paths,
+)
+from data_io.embryo_preparation import (
+    ManifestInput, ExternalRunInput, RawHestaInput, prepare_source, prepare_dataset,
+    load_external_preprocessed_run as _load_external_preprocessed_run,
 )
 from training.fit import (
     CudaMemoryMonitor,
@@ -38,72 +41,17 @@ from training.fit import (
     run_one_forward,
     train_small_crc_model,
 )
-from scripts.run_crc_stereocite import (
+from training import artifacts as _artifacts
+from training.embryo_task import run_embryo_training_task, SingleModalityPolicy, write_json
+from training.artifacts import (
     save_final_embeddings,
     save_ot_prior_topk,
 )
 
 
 def get_dataset_defaults():
-    """Current entry defaults; suite arguments remain explicit overrides."""
-    return {
-        'data_dir': "/home/hujinlan/human_embryo",
-        'output_dir': "/home/hujinlan/spa_mo_model/results/human_embryo_rna_only",
-        'preprocess_only': False,
-        'dry_run': False,
-        'train': False,
-        'single_modality': "RNA",
-        'reuse_preprocessed': False,
-        'preprocessed_run_dir': None,
-        'require_harmony': False,
-        'hvg_num': 3000,
-        'hvg_sample_per_section': 5000,
-        'svd_fit_per_section': 20000,
-        'n_comps': 50,
-        'target_sum': 10000.0,
-        'min_counts': 10.0,
-        'min_genes': 5,
-        'max_pct_mt': 30.0,
-        'max_spots_per_section': None,
-        'source_chunk_rows': 4096,
-        'epochs': 100,
-        'lr': 1e-3,
-        'weight_decay': 0.0,
-        'device': "cuda",
-        'seed': 42,
-        'log_every': 1,
-        'update_interval': 20,
-        'uot_max_iter': 100,
-        'uot_epsilon': 0.05,
-        'uot_tau_a': 1.0,
-        'uot_tau_b': 1.0,
-        'uot_stabilizer': 1e-8,
-        'disable_uot': False,
-        'candidate_backend': "faiss_ivf",
-        'initial_modality_candidate_k': 100,
-        'candidate_k': 200,
-        'attention_topk': 10,
-        'faiss_nlist': 4096,
-        'faiss_nprobe': 64,
-        'faiss_device': "auto",
-        'faiss_train_sample_size': 100000,
-        'faiss_query_batch_size': 2048,
-        'spatial_knn_k': 5,
-        'graphsage_edge_batch_size': 200000,
-        'decoder_chunk_size': 50000,
-        'ot_attention_source_chunk_size': 50000,
-        'training_loss_only': True,
-        'checkpoint_ot_attention': True,
-        'checkpoint_encoder_fusion': True,
-        'checkpoint_decoder_chunks': True,
-        'checkpoint_graph_encoder': True,
-        'cache_spatial_graphs': True,
-        'amp_dtype': "bf16",
-        'save_candidate_qc': False,
-        'log_cuda_memory': False,
-        'log_cuda_memory_detail': False,
-        'lambda_contrast': 0.0,
-    }
+    """Compatibility entry: defaults are owned by training.entry_defaults."""
+    return _entry_defaults()
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -223,30 +171,8 @@ def validate_args(args: argparse.Namespace) -> None:
 def load_external_preprocessed_run(
     run_dir: Path, maximum_per_section: int | None
 ) -> tuple[dict[str, Any], dict, dict, dict[str, Any]]:
-    summary_path = run_dir / "run_summary.json"
-    if not summary_path.exists():
-        raise FileNotFoundError(f"External preprocessing summary is missing: {summary_path}")
-    source_summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    if source_summary.get("status") != "PASS":
-        raise ValueError("External preprocessing run is not successful.")
-    manifest = source_summary["preprocess_manifest"]
-    feature_dict = {}
-    spatial_dict = {}
-    for section in manifest["section_order"]:
-        features = np.load(manifest["feature_files"][section], mmap_mode="c")
-        spatial = np.load(manifest["spatial_files"][section], mmap_mode="r")
-        if len(features) != len(spatial):
-            raise ValueError(f"{section}: feature/spatial counts differ in external cache.")
-        if maximum_per_section is not None:
-            if maximum_per_section <= 0 or maximum_per_section > len(features):
-                raise ValueError(
-                    f"Invalid --max_spots_per_section={maximum_per_section} for {section}."
-                )
-            features = np.array(features[:maximum_per_section], dtype=np.float32, copy=True)
-            spatial = np.array(spatial[:maximum_per_section], copy=True)
-        feature_dict[section] = {"RNA": features}
-        spatial_dict[section] = spatial
-    return manifest, feature_dict, spatial_dict, source_summary
+    """Compatibility signature; authoritative loader lives in data_io."""
+    return _load_external_preprocessed_run(run_dir, maximum_per_section)
 
 
 def build_model_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -280,8 +206,6 @@ def build_model_config(args: argparse.Namespace) -> dict[str, Any]:
     return config
 
 
-def write_json(path: Path, value: Any) -> None:
-    path.write_text(json.dumps(json_safe(value), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def resolve_run_config(args):
@@ -334,19 +258,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.preprocessed_run_dir is not None:
         if not args.reuse_preprocessed:
             raise ValueError("--preprocessed_run_dir requires --reuse_preprocessed.")
-        preprocess_manifest, feature_dict, spatial_dict, external_source_summary = (
-            load_external_preprocessed_run(
-                Path(args.preprocessed_run_dir).resolve(), args.max_spots_per_section
-            )
-        )
+        preparation_source = prepare_source(ExternalRunInput(
+            Path(args.preprocessed_run_dir).resolve(), args.max_spots_per_section
+        ))
+        preprocess_manifest = preparation_source.manifest
+        external_source_summary = preparation_source.external_source_summary
     elif not args.reuse_preprocessed:
-        preprocess_manifest = preprocess_hesta_rna(
-            paths,
-            cache_dir,
-            **run_config["preprocessing"],
-        )
+        preparation_source = prepare_source(RawHestaInput(
+            paths, cache_dir, run_config["preprocessing"]
+        ))
+        preprocess_manifest = preparation_source.manifest
     else:
-        preprocess_manifest, _, _ = load_preprocessed_manifest(cache_dir)
+        preparation_source = prepare_source(ManifestInput(cache_dir))
+        preprocess_manifest = preparation_source.manifest
     if args.require_harmony and not preprocess_manifest.get("harmony_used"):
         raise ValueError("Mandatory Harmony correction is missing from preprocessing metadata.")
     if requested_action == "preprocess_only":
@@ -359,132 +283,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         write_json(output_dir / "run_summary.json", summary)
         return summary
 
-    if args.preprocessed_run_dir is None:
-        preprocess_manifest, feature_dict, spatial_dict = load_preprocessed_manifest(cache_dir)
-    section_order = list(preprocess_manifest["section_order"])
+    prepared = prepare_dataset(preparation_source)
+    preprocess_manifest = prepared.compatibility_context["preprocess_manifest"]
+    feature_dict = prepared.feature_dict
+    spatial_dict = prepared.spatial_loc_dict
+    section_order = prepared.section_order
     run_config["section_order"] = section_order
-    model_config = run_config["model_config"]
-    model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
-    resolved = list(model._resolve_modality_order(feature_dict[section_order[0]]))
-    if resolved != ["RNA"]:
-        raise AssertionError(f"Expected the RNA-only branch, got {resolved}.")
-    memory_monitor = CudaMemoryMonitor(
-        enabled=bool(args.log_cuda_memory), output_dir=output_dir, requested_device=args.device
+    return run_embryo_training_task(
+        run_config, prepared,
+        policy=SingleModalityPolicy(initial_uot=not args.disable_uot, dry_eval=True),
+        requested_action=requested_action, data_dir=data_dir,
     )
-    start = time.time()
-    if not args.disable_uot:
-        initialize_model_ot_prior(model, feature_dict, section_order, args)
-    else:
-        model.ot_prior = {}
-    history = None
-    ot_updates: list[int] = []
-    if args.train:
-        history, outputs, ot_updates = train_small_crc_model(
-            model, feature_dict, spatial_dict, None, section_order, args, memory_monitor
-        )
-        torch.save(
-            {"model_state_dict": model.state_dict(), "model_config": model_config, "section_order": section_order},
-            output_dir / "model_checkpoint.pt",
-        )
-        write_json(output_dir / "loss_history.json", history)
-    else:
-        model.eval()
-        with torch.no_grad():
-            outputs = run_one_forward(
-                model,
-                feature_dict,
-                spatial_dict,
-                None,
-                section_order,
-                epoch=0,
-                decoder_chunk_size=args.decoder_chunk_size,
-                ot_attention_source_chunk_size=args.ot_attention_source_chunk_size,
-                cache_spatial_graphs=args.cache_spatial_graphs,
-            )
-    if outputs["mode"] != {
-        "single_modality": True,
-        "modalities": ["RNA"],
-        "contrastive_skipped": True,
-        "fusion": "identity",
-    }:
-        raise AssertionError(f"Unexpected model mode metadata: {outputs['mode']}")
-    crossview = float(outputs["losses"]["crossview_loss"].detach().cpu())
-    if crossview != 0.0:
-        raise AssertionError(f"RNA-only cross-view loss must be zero, got {crossview}.")
-    embedding_paths = save_final_embeddings(output_dir, outputs["final_embeddings"])
-    ot_paths = save_ot_prior_topk(
-        output_dir / "ot_prior_topk",
-        outputs.get("ot_prior"),
-        outputs["final_embeddings"],
-        requested_action,
-        save_candidate_qc=args.save_candidate_qc,
-    )
-    summary = {
-        "resolved_config": run_config,
-        "status": "PASS",
-        "mode": requested_action,
-        "input_data_path": str(data_dir),
-        "output_dir": str(output_dir),
-        "model_mode": outputs["mode"],
-        "modalities": ["RNA"],
-        "single_modality_switch": model_config["model"]["single_modality_mode"],
-        "section_order": section_order,
-        "feature_shapes": {
-            section: list(feature_dict[section]["RNA"].shape) for section in section_order
-        },
-        "final_embedding_shapes": {
-            section: list(outputs["final_embeddings"][section].shape) for section in section_order
-        },
-        "losses": {name: float(value.detach().cpu()) for name, value in outputs["losses"].items()},
-        "crossview_loss_skipped": crossview == 0.0,
-        "fusion_mode": "identity",
-        "reconstruction_modalities": {
-            section: sorted(outputs["reconstructions"][section]) for section in section_order
-        },
-        "harmony_used": bool(preprocess_manifest.get("harmony_used")),
-        "full_spot": args.max_spots_per_section is None,
-        "per_spot_output": True,
-        "preprocessing": {
-            "harmony_used": bool(preprocess_manifest.get("harmony_used")),
-            "harmony_batch_key": preprocess_manifest.get("harmony_batch_key"),
-            "harmony_implementation": preprocess_manifest.get("harmony_implementation"),
-            "external_preprocessed_run": str(Path(args.preprocessed_run_dir).resolve())
-            if args.preprocessed_run_dir is not None else None,
-            "max_spots_per_section": args.max_spots_per_section,
-        },
-        "rna_source": "layers/counts",
-        "ot_prior_mode": "disabled" if args.disable_uot else "candidate_sparse",
-        "bidirectional_ot_attention": not args.disable_uot,
-        "dynamic_candidate_source": "ot",
-        "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
-        "pre_post_graphsage_parameter_sharing": False,
-        "ot_refresh_embedding_key": "ot_embeddings",
-        "ot_updates": ot_updates,
-        "elapsed_time_sec": float(time.time() - start),
-        "gpu_name": torch.cuda.get_device_name(0) if args.device == "cuda" else None,
-        "peak_cuda_allocated_gib": torch.cuda.max_memory_allocated() / (1024 ** 3)
-        if args.device == "cuda" else None,
-        "peak_cuda_reserved_gib": torch.cuda.max_memory_reserved() / (1024 ** 3)
-        if args.device == "cuda" else None,
-        "preprocess_manifest": preprocess_manifest,
-        "external_preprocessing_summary": str(
-            Path(args.preprocessed_run_dir).resolve() / "run_summary.json"
-        ) if external_source_summary is not None else None,
-        "saved_files": {
-            "embeddings": embedding_paths,
-            "final_embeddings": embedding_paths,
-            "ot_prior_topk": ot_paths,
-            "checkpoint": str(output_dir / "model_checkpoint.pt") if args.train else None,
-            "loss_history": str(output_dir / "loss_history.json") if history is not None else None,
-        },
-        "confirmations": {
-            "original_h5ad_modified": False,
-            "fabricated_missing_modality": False,
-            "contrastive_loss_computed": False,
-        },
-    }
-    write_json(output_dir / "run_summary.json", summary)
-    return summary
 
 
 def main() -> None:

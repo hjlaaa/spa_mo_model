@@ -1,6 +1,7 @@
 """Resolve ordinary config dictionaries before constructing a model.
 
-Dataset defaults and CLI-to-field mappings stay in their entrypoints. This
+Entry defaults live in training.entry_defaults; CLI-to-field projections stay
+in their entrypoints. Model defaults stay in model.configure. This
 module does not load data, construct models, run training, or write artifacts.
 """
 
@@ -12,19 +13,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from model.configure import get_default_model_config, reject_unsupported_model_config
-
-
-def add_feature_graph_argument(parser):
-    """Shared optional model capability; experiment choices stay outside core."""
-    import argparse
-    parser.add_argument(
-        "--feature_graph", action=argparse.BooleanOptionalAction, default=None,
-        help="Enable section-local feature neighbours before OT; refresh from epoch 100.",
-    )
-
-
-def feature_graph_overrides(args):
-    return {"feature_graph": {"enabled": getattr(args, "feature_graph", None)}}
 
 
 def load_json(path: str | Path):
@@ -108,7 +96,7 @@ def parse_dataset_args(parser, argv, defaults):
     """Parse user input once, then fill only absent dataset options.
 
     Parser actions use None for absence, including booleans. Dataset defaults
-    stay in the owning runner; this helper does not choose hyperparameters.
+    come from training.entry_defaults; this helper does not choose hyperparameters.
     """
     args = parser.parse_args(argv)
     for name, value in defaults.items():

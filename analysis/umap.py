@@ -16,6 +16,7 @@ from analysis.cache import (array_identity, frame_identity, file_identity, summa
 from analysis.plotting import (plot_panel_c, plot_panel_e, plot_individual,
     has_meaningful_biological_labels)
 from analysis.protocols import umap_parameters
+from analysis.umap_workflow import project_umap_views, save_umap_coordinate_table
 
 def json_safe(value: Any) -> Any:
     if isinstance(value, dict):
@@ -112,26 +113,14 @@ def generate_dataset(bundle: Any, args: Any, *, output_dir: Path) -> None:
     tables_dir.mkdir(parents=True, exist_ok=True)
     n_obs = len(bundle.metadata)
     point_size = 2.0 if n_obs >= 50_000 else 8.0
-    input_coordinates = {}
-    for modality, values in bundle.input_features.items():
-        validate_features(f"{bundle.name} input {modality}", values, n_obs)
-        input_coordinates[modality] = fit_umap(
-            values,
-            tables_dir / f"input_{modality.lower()}_umap.npy",
-            args.n_neighbors,
-            args.min_dist,
-            args.seed,
-            args.overwrite_umap, source_identity=source,
-        )
-    validate_features(f"{bundle.name} integrated", bundle.integrated_features, n_obs)
-    integrated_coordinates = fit_umap(
-        bundle.integrated_features,
-        tables_dir / "integrated_embedding_umap.npy",
-        args.n_neighbors,
-        args.min_dist,
-        args.seed,
-        args.overwrite_umap, source_identity=source,
-    )
+    input_views = ((modality, values, tables_dir / f"input_{modality.lower()}_umap.npy",
+                    f"{bundle.name} input {modality}")
+                   for modality, values in bundle.input_features.items())
+    input_coordinates = dict(project_umap_views(
+        input_views, args, source=source, force_float32=True, n_obs=n_obs))
+    integrated_coordinates = next(project_umap_views(
+        [("integrated", bundle.integrated_features, tables_dir / "integrated_embedding_umap.npy",
+          f"{bundle.name} integrated")], args, source=source, force_float32=True, n_obs=n_obs))[1]
     custom_biology = human_celltype_colors(bundle)
     include_biology = has_meaningful_biological_labels(bundle)
     plot_panel_c(bundle, input_coordinates, figures_dir, point_size, args.seed)
@@ -186,17 +175,9 @@ def generate_dataset(bundle: Any, args: Any, *, output_dir: Path) -> None:
             "cluster", point_size, args.seed,
         )
 
-    coordinates_table = bundle.metadata.copy()
-    for modality, coordinates in input_coordinates.items():
-        key = modality.lower()
-        coordinates_table[f"input_{key}_UMAP1"] = coordinates[:, 0]
-        coordinates_table[f"input_{key}_UMAP2"] = coordinates[:, 1]
-    coordinates_table["integrated_UMAP1"] = integrated_coordinates[:, 0]
-    coordinates_table["integrated_UMAP2"] = integrated_coordinates[:, 1]
-    for k, labels in sorted(bundle.joint_labels.items()):
-        coordinates_table[f"joint_k{k}"] = labels
     coordinate_path = tables_dir / "umap_coordinates_and_labels.csv.gz"
-    coordinates_table.to_csv(coordinate_path, index=False, compression="gzip")
+    save_umap_coordinate_table(bundle.metadata, integrated_coordinates, bundle.joint_labels,
+                               coordinate_path, input_coordinates=input_coordinates)
     sample_path = tables_dir / "sample_indices_by_section.npz"
     np.savez_compressed(sample_path, **bundle.selections)
 

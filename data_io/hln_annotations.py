@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import anndata as ad
 import numpy as np
 import pandas as pd
+from data_io.reference_results import read_result_table, prefix_columns, merged_embedding
+from data_io.large_results import borrowed_input
+
 SECTIONS = ["Human_Lymph_Node_A1", "Human_Lymph_Node_D1"]
 @dataclass(frozen=True)
 class LoadedData:
@@ -12,6 +15,15 @@ class LoadedData:
     sections: np.ndarray
     barcodes: np.ndarray
     source_paths: tuple[Path, ...]
+
+    def __post_init__(self):
+        # Borrow the existing row identity; annotations/truth are analysis-owned.
+        contract = borrowed_input(self.embedding, sections=self.sections,
+            spot_ids=self.barcodes, evidence={'kind': 'adapter_section_barcode',
+                'embedding_identity': 'format IDs or selected raw row order; existing checks only'},
+            provenance={'source_paths': self.source_paths, 'truth_status': 'not_loaded'})
+        object.__setattr__(self, 'embedding', contract.embedding)
+
 
 def load_spa_mo_model(paths) -> LoadedData:
     run = Path(paths['run_dir'])
@@ -41,8 +53,8 @@ def load_spa_mo_model(paths) -> LoadedData:
 
 def load_cosie(paths) -> LoadedData:
     path = Path(paths['embedding_file'])
-    table = pd.read_csv(path)
-    embedding_columns = [column for column in table if column.startswith('COSIE')]
+    table = read_result_table(path)
+    embedding_columns = prefix_columns(table, 'COSIE')
     barcode_column = 'obs_name.1' if 'obs_name.1' in table else 'obs_name'
     return LoadedData(table[embedding_columns].to_numpy(float), table['section'].astype(str).to_numpy(), table[barcode_column].astype(str).to_numpy(), (path,))
 
@@ -62,10 +74,10 @@ def load_present(paths) -> LoadedData:
 def load_spamosaic(paths) -> LoadedData:
     path = Path(paths['embedding_file'])
     output = ad.read_h5ad(path)
-    return LoadedData(np.asarray(output.obsm['merged_emb']).copy(), output.obs['section'].astype(str).to_numpy(), output.obs['original_barcode'].astype(str).to_numpy(), (path,))
+    return LoadedData(merged_embedding(output, copy=True), output.obs['section'].astype(str).to_numpy(), output.obs['original_barcode'].astype(str).to_numpy(), (path,))
 
 def load_mofa(paths) -> LoadedData:
     path = Path(paths['embedding_file'])
-    table = pd.read_csv(path)
-    factor_columns = [column for column in table if column.startswith('Factor')]
+    table = read_result_table(path)
+    factor_columns = prefix_columns(table, 'Factor')
     return LoadedData(table[factor_columns].to_numpy(float), table['section'].astype(str).to_numpy(), table['original_barcode'].astype(str).to_numpy(), (path,))

@@ -168,3 +168,25 @@ def read_simulation_pair(data_dir: Path, section: str) -> tuple[ad.AnnData, ad.A
     rna = ad.read_h5ad(folder / "adata_RNA.h5ad")
     adt = ad.read_h5ad(folder / "adata_ADT.h5ad")
     return adapt_simulation_pair(section, rna, adt)
+
+
+def simulation_prepared_truth(rna_mem, protein_mem) -> dict:
+    """Expose already adapted, selected scientific metadata without copying it.
+
+    This explicit strategy is used only by the Simulation caller. It neither
+    reads labels nor changes their scope; factor arrays retain their owner.
+    """
+    return {
+        "status": "provided",
+        "labels": {section: rna.obs["spatial_domain"] for section, rna in rna_mem.items()},
+        "factors": {
+            section: {
+                "spfac": rna.obsm["spfac"],
+                "rna_nsfac": rna.obsm["nsfac"],
+                "protein_nsfac": protein_mem[section].obsm["nsfac"],
+            }
+            for section, rna in rna_mem.items()
+        },
+        "source": "adapt_simulation_pair: existing spatial_domain/spfac/nsfac",
+        "scope": "selected spots in section_order; metadata only",
+    }

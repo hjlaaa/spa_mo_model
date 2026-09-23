@@ -16,7 +16,11 @@ from analysis.clustering import stack_selected
 from analysis.clustering import scale_full_then_select
 from analysis.clustering import apply_saved_scaler
 
-from data_io.visualization_inputs import load_spatch_modality_subset, preprocess_adapted_rna_protein_inputs, preprocess_misar_inputs, preprocess_mousebrain_inputs, preprocess_paired_rna_protein_inputs
+from analysis.visualization_preparation import load_spatch_modality_subset, preprocess_adapted_rna_protein_inputs, preprocess_misar_inputs, preprocess_mousebrain_inputs, preprocess_paired_rna_protein_inputs
+
+from data_io.large_results import read_section_arrays, read_selected_obs, borrowed_input
+from analysis.integration_workflow import (section_manifest, load_npy_joint_labels,
+    load_csv_joint_labels, append_selected_metadata, select_modality_rows, load_saved_integration)
 
 DATASETS = ('human_embryo', 'misar_seq', 'mousebrain', 'spatch', 'crc_stereocite', 'human_lymph_node', 'mouse_spleen', 'mouse_thymus', 'simulation')
 
@@ -37,44 +41,15 @@ class DatasetBundle:
     representative_k: int
     input_provenance: dict[str, Any]
 
-def section_manifest(sections: list[str], selections: dict[str, np.ndarray], aliases: dict[str, str]) -> pd.DataFrame:
-    frames = []
-    offset = 0
-    for section in sections:
-        index = selections[section]
-        frames.append(pd.DataFrame({'sample_index': np.arange(offset, offset + len(index)), 'section': section, 'section_label': aliases.get(section, section), 'section_row_index': index}))
-        offset += len(index)
-    return pd.concat(frames, ignore_index=True)
+    def __post_init__(self):
+        contract = borrowed_input(self.integrated_features,
+            sections=self.metadata['section'].to_numpy() if 'section' in self.metadata else None,
+            spot_ids=self.metadata['spot_id'].to_numpy() if 'spot_id' in self.metadata else None,
+            evidence={'kind': 'workflow_selected_rows', 'selection': self.selections,
+                      'identity_source': 'existing workflow metadata; row tokens are not new barcodes'},
+            provenance={'input': self.input_provenance, 'metadata': self.metadata})
+        self.integrated_features = contract.embedding
 
-def load_npy_joint_labels(clustering_dir: Path, sections: list[str], selections: dict[str, np.ndarray]) -> dict[int, np.ndarray]:
-    result = {}
-    for directory in sorted(clustering_dir.glob('joint_k*')):
-        try:
-            k = int(directory.name.split('joint_k', 1)[1])
-        except ValueError:
-            continue
-        chunks = []
-        for section in sections:
-            labels = np.load(directory / f'labels_{section}.npy', mmap_mode='r')
-            chunks.append(np.asarray(labels[selections[section]], dtype=np.int32))
-        result[k] = np.concatenate(chunks)
-    return result
-
-def load_csv_joint_labels(clustering_dir: Path, sections: list[str], selections: dict[str, np.ndarray]) -> dict[int, np.ndarray]:
-    result = {}
-    for directory in sorted(clustering_dir.glob('joint_k*')):
-        try:
-            k = int(directory.name.split('joint_k', 1)[1])
-        except ValueError:
-            continue
-        chunks = []
-        for section in sections:
-            table = pd.read_csv(directory / f'labels_{section}.csv')
-            if 'cluster' not in table:
-                raise KeyError(f'{directory}: missing cluster column for {section}.')
-            chunks.append(table['cluster'].to_numpy(dtype=np.int32)[selections[section]])
-        result[k] = np.concatenate(chunks)
-    return result
 
 def load_paired_rna_protein(dataset: str, display_name: str, analysis_sections: list[str], saved_names: dict[str, str], source_dirs: dict[str, str], maximum: int, seed: int, *, run_dir: Path, data_dir: Path, analysis_dir: Path) -> DatasetBundle:
     counts = {section: int(np.load(run_dir / f'final_embeddings_{saved_names[section]}.npy', mmap_mode='r').shape[0]) for section in analysis_sections}
@@ -89,10 +64,10 @@ def load_paired_rna_protein(dataset: str, display_name: str, analysis_sections: 
         annotation = pd.read_csv(annotation_path).set_index('Barcode')['manual-anno']
         mask = metadata['section'].eq('Human_Lymph_Node_A1')
         metadata.loc[mask, primary_label] = metadata.loc[mask, 'spot_id'].map(annotation).fillna('NA')
-    final_arrays = {section: np.load(run_dir / f'final_embeddings_{saved_names[section]}.npy', mmap_mode='r') for section in analysis_sections}
-    final_selected = stack_selected(final_arrays, analysis_sections, selections)
-    integrated = apply_saved_scaler(final_selected, analysis_dir / 'standardized_embedding/scaler_parameters.npz', 'joint')
-    joint = load_csv_joint_labels(analysis_dir / 'standardized_embedding/clustering', analysis_sections, selections)
+    integrated, joint = load_saved_integration(
+        {section: run_dir / f'final_embeddings_{saved_names[section]}.npy' for section in analysis_sections},
+        analysis_sections, selections, scaler_path=analysis_dir / 'standardized_embedding/scaler_parameters.npz',
+        scaler_prefix='joint', clustering_dir=analysis_dir / 'standardized_embedding/clustering', label_format='csv')
     scope = 'deterministic_visualization_sample' if sum(counts.values()) > sum((len(v) for v in selections.values())) else 'full_dataset'
     return DatasetBundle(dataset, display_name, run_dir, analysis_dir, analysis_sections, counts, selections, metadata, input_features, integrated, primary_label, joint, 5, {'RNA': f'training-matched Harmony RNA features; preprocessing scope={scope}', 'Protein': f'training-matched Harmony protein features; preprocessing scope={scope}', 'preprocessing_scope': scope})
 
@@ -116,11 +91,9 @@ def load_adapted_rna_protein(dataset: str, display_name: str, read_pair, data_na
     metadata = section_manifest(sections, selections, {})
     chunks = []
     for section in sections:
-        frame = pd.read_csv(run_dir / f'obs_metadata_{section}.csv').iloc[selections[section]].reset_index(drop=True)
-        frame['spot_id'] = frame['obs_name'].astype(str)
-        frame = frame.drop(columns=['section'], errors='ignore')
+        frame = read_selected_obs(run_dir / f'obs_metadata_{section}.csv', selections[section])
         chunks.append(frame)
-    metadata = pd.concat([metadata, pd.concat(chunks, ignore_index=True)], axis=1)
+    metadata = append_selected_metadata(metadata, chunks)
     if dataset == 'simulation':
         primary_label = 'spatial_domain'
         metadata[primary_label] = clean_labels(metadata[primary_label])
@@ -128,10 +101,10 @@ def load_adapted_rna_protein(dataset: str, display_name: str, read_pair, data_na
         primary_label = 'reference_annotation'
         metadata[primary_label] = 'not_available'
     input_features = preprocess_adapted_rna_protein_inputs(read_pair, data_dir, run_dir, sections, selections, hvg_rna=hvg_rna, hvg_protein=hvg_protein)
-    final_arrays = {section: np.load(run_dir / f'final_embeddings_{section}.npy', mmap_mode='r') for section in sections}
-    final_selected = stack_selected(final_arrays, sections, selections)
-    integrated = apply_saved_scaler(final_selected, analysis_dir / 'standardized_embedding/scaler_parameters.npz', 'joint')
-    joint = load_csv_joint_labels(analysis_dir / 'standardized_embedding/clustering', sections, selections)
+    integrated, joint = load_saved_integration(
+        {section: run_dir / f'final_embeddings_{section}.npy' for section in sections}, sections, selections,
+        scaler_path=analysis_dir / 'standardized_embedding/scaler_parameters.npz', scaler_prefix='joint',
+        clustering_dir=analysis_dir / 'standardized_embedding/clustering', label_format='csv')
     return DatasetBundle(dataset, display_name, run_dir, analysis_dir, sections, counts, selections, metadata, input_features, integrated, primary_label, joint, 5, {'RNA': 'reconstructed full-run Harmony RNA model-input features', 'Protein': 'reconstructed full-run Harmony protein model-input features', 'preprocessing_scope': 'full_dataset'})
 
 def load_mouse_thymus(maximum: int, seed: int, *, run_dir: Path, data_dir: Path, analysis_dir: Path) -> DatasetBundle:
@@ -155,15 +128,14 @@ def load_human(maximum: int, seed: int, *, run_dir: Path, data_dir: Path, analys
         id_col = 'obs_name' if 'obs_name' in frame else 'cellid' if 'cellid' in frame else None
         frame['spot_id'] = frame[id_col].astype(str) if id_col is not None else [f'{section}:{i}' for i in selections[section]]
         meta_chunks.append(frame)
-    labels = pd.concat(meta_chunks, ignore_index=True)
-    metadata = pd.concat([metadata, labels], axis=1)
+    metadata = append_selected_metadata(metadata, meta_chunks)
     metadata['celltype'] = clean_labels(metadata['celltype'])
-    input_arrays = {section: np.load(summary['preprocess_manifest']['feature_files'][section], mmap_mode='r') for section in sections}
+    input_arrays = read_section_arrays({section: summary['preprocess_manifest']['feature_files'][section] for section in sections})
     input_features = {'RNA': scale_full_then_select(input_arrays, sections, selections)}
-    final_arrays = {section: np.load(summary['saved_files']['final_embeddings'][section], mmap_mode='r') for section in sections}
-    final_selected = stack_selected(final_arrays, sections, selections)
-    integrated = apply_saved_scaler(final_selected, analysis_dir / 'cache/scaler_parameters.npz', 'joint')
-    joint = load_npy_joint_labels(analysis_dir / 'clustering', sections, selections)
+    integrated, joint = load_saved_integration(
+        {section: summary['saved_files']['final_embeddings'][section] for section in sections}, sections, selections,
+        scaler_path=analysis_dir / 'cache/scaler_parameters.npz', scaler_prefix='joint',
+        clustering_dir=analysis_dir / 'clustering', label_format='npy')
     return DatasetBundle('human_embryo', 'Human embryo', run_dir, analysis_dir, sections, counts, selections, metadata, input_features, integrated, 'celltype', joint, 10, {'RNA': 'saved full-run Harmony RNA features; scaler fitted on all spots', 'preprocessing_scope': 'full_dataset'})
 
 def load_misar(maximum: int, seed: int, *, run_dir: Path, data_dir: Path, analysis_dir: Path) -> DatasetBundle:
@@ -175,22 +147,17 @@ def load_misar(maximum: int, seed: int, *, run_dir: Path, data_dir: Path, analys
     metadata = section_manifest(sections, selections, aliases)
     chunks = []
     for section in sections:
-        frame = pd.read_csv(run_dir / f'obs_metadata_{section}.csv').iloc[selections[section]].reset_index(drop=True)
-        frame['spot_id'] = frame['obs_name'].astype(str)
-        frame = frame.drop(columns=['section'], errors='ignore')
+        frame = read_selected_obs(run_dir / f'obs_metadata_{section}.csv', selections[section])
         chunks.append(frame)
-    metadata = pd.concat([metadata, pd.concat(chunks, ignore_index=True)], axis=1)
+    metadata = append_selected_metadata(metadata, chunks)
     metadata['Combined_Clusters_annotation'] = clean_labels(metadata['Combined_Clusters_annotation'])
     input_full = preprocess_misar_inputs(run_dir, sections, data_dir=data_dir)
-    input_features = {}
     offsets = np.cumsum([0, *[counts[s] for s in sections]])
-    for (modality, values) in input_full.items():
-        chunks = [values[offsets[i] + selections[s]] for (i, s) in enumerate(sections)]
-        input_features[modality] = np.vstack(chunks).astype(np.float32)
-    final_arrays = {s: np.load(run_dir / f'final_embeddings_{s}.npy', mmap_mode='r') for s in sections}
-    final_selected = stack_selected(final_arrays, sections, selections)
-    integrated = apply_saved_scaler(final_selected, analysis_dir / 'standardized_embedding/scaler_parameters.npz', 'joint')
-    joint = load_csv_joint_labels(analysis_dir / 'standardized_embedding/clustering', sections, selections)
+    input_features = select_modality_rows(input_full, sections, selections, offsets)
+    integrated, joint = load_saved_integration(
+        {s: run_dir / f'final_embeddings_{s}.npy' for s in sections}, sections, selections,
+        scaler_path=analysis_dir / 'standardized_embedding/scaler_parameters.npz', scaler_prefix='joint',
+        clustering_dir=analysis_dir / 'standardized_embedding/clustering', label_format='csv')
     return DatasetBundle('misar_seq', 'MISAR-seq', run_dir, analysis_dir, sections, counts, selections, metadata, input_features, integrated, 'Combined_Clusters_annotation', joint, 5, {'RNA': 'reconstructed full-run Harmony RNA model-input features', 'ATAC': 'reconstructed full-run Harmony ATAC model-input features', 'preprocessing_scope': 'full_dataset'})
 
 def load_mousebrain(maximum: int, seed: int, *, run_dir: Path, data_dir: Path, analysis_dir: Path) -> DatasetBundle:
@@ -207,11 +174,11 @@ def load_mousebrain(maximum: int, seed: int, *, run_dir: Path, data_dir: Path, a
         frame = rna.obs.copy().iloc[selections[section]].reset_index(drop=True)
         frame['spot_id'] = rna.obs_names.astype(str).to_numpy()[selections[section]]
         chunks.append(frame)
-    metadata = pd.concat([metadata, pd.concat(chunks, ignore_index=True)], axis=1)
+    metadata = append_selected_metadata(metadata, chunks)
     metadata['RegionLoupe'] = clean_labels(metadata['RegionLoupe'])
     offsets = np.cumsum([0, *[counts[s] for s in sections]])
-    input_features = {modality: np.vstack([values[offsets[i] + selections[s]] for (i, s) in enumerate(sections)]).astype(np.float32) for (modality, values) in input_full.items()}
-    final_arrays = {s: np.load(run_dir / f'final_embeddings/{s}_final_embedding.npy', mmap_mode='r') for s in sections}
+    input_features = select_modality_rows(input_full, sections, selections, offsets)
+    final_arrays = read_section_arrays({s: run_dir / f'final_embeddings/{s}_final_embedding.npy' for s in sections})
     final_all = np.vstack([np.asarray(final_arrays[s], dtype=np.float32) for s in sections])
     (integrated_all, _) = fitted_space(final_all, 'standardized_embedding')
     integrated_all = integrated_all.astype(np.float32)
@@ -238,7 +205,7 @@ def load_spatch(maximum: int, seed: int, *, feature_cache_dir: Path, run_dir: Pa
         frame['spot_id'] = [f'{section}:{int(x)}:{int(y)}' for (x, y) in zip(frame['x'], frame['y'])]
         frame = frame.drop(columns=['section'], errors='ignore')
         chunks.append(frame)
-    metadata = pd.concat([metadata, pd.concat(chunks, ignore_index=True)], axis=1)
+    metadata = append_selected_metadata(metadata, chunks)
     metadata['cell_type_common'] = clean_labels(metadata['cell_type_common'])
     input_features = {}
     feature_cache_dir = check_output_path(feature_cache_dir, [run_dir])
@@ -259,10 +226,10 @@ def load_spatch(maximum: int, seed: int, *, feature_cache_dir: Path, run_dir: Pa
         np.save(cache_path, np.asarray(features, dtype=np.float32))
         input_features[modality] = np.load(cache_path, mmap_mode='r')
     finish_analysis(feature_cache_dir, input_source)
-    final_arrays = {s: np.load(run_dir / f'final_embeddings_{s}.npy', mmap_mode='r') for s in sections}
-    final_selected = stack_selected(final_arrays, sections, selections)
-    integrated = apply_saved_scaler(final_selected, analysis_dir / 'standardized_embedding/scaler_parameters.npz', 'combined')
-    joint = load_csv_joint_labels(analysis_dir / 'standardized_embedding/clustering', sections, selections)
+    integrated, joint = load_saved_integration(
+        {s: run_dir / f'final_embeddings_{s}.npy' for s in sections}, sections, selections,
+        scaler_path=analysis_dir / 'standardized_embedding/scaler_parameters.npz', scaler_prefix='combined',
+        clustering_dir=analysis_dir / 'standardized_embedding/clustering', label_format='csv')
     return DatasetBundle('spatch', 'SPATCH', run_dir, analysis_dir, sections, counts, selections, metadata, input_features, integrated, 'cell_type_common', joint, 5, {'RNA': 'training-matched Harmony preprocessing fitted on the shared visualization sample', 'Protein': 'training-matched Harmony preprocessing fitted on the shared visualization sample', 'HE': 'training-matched Harmony preprocessing fitted on the shared visualization sample', 'preprocessing_scope': 'deterministic_visualization_sample'})
 
 

@@ -178,74 +178,18 @@ def load_misar_inputs(input_dir: Path, section_order_arg: str | None, default_se
 
 
 def load_spatch_inputs(input_dir: Path, section_order):
-    summary_path = input_dir / "run_summary.json"
-    if not summary_path.is_file():
-        raise FileNotFoundError(summary_path)
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    metadata = pd.read_csv(input_dir / "spot_metadata.csv.gz", low_memory=False)
-    embeddings = {}
-    spatial = {}
-    spot_indices = {}
-    obs_meta = {}
-    sources = {"metadata": str(input_dir / "spot_metadata.csv.gz")}
-    for section in section_order:
-        candidates = [
-            input_dir / f"final_embeddings_{section}.npy",
-            input_dir / "final_embeddings" / f"{section}_final_embedding.npy",
-        ]
-        emb_path = next((path for path in candidates if path.is_file()), None)
-        if emb_path is None:
-            raise FileNotFoundError(
-                f"Cannot locate {section} embedding; tried: {candidates}"
-            )
-        emb = np.load(emb_path, mmap_mode="r")
-        meta = metadata.loc[metadata["section"].astype(str).eq(section)].reset_index(drop=True)
-        if len(meta) != emb.shape[0]:
-            raise ValueError(f"{section}: embedding/metadata row mismatch.")
-        embeddings[section] = np.asarray(emb)
-        spatial[section] = meta[["x", "y"]].to_numpy(dtype=np.float32)
-        spot_indices[section] = np.arange(len(meta), dtype=np.int64)
-        obs_meta[section] = meta
-        sources[f"embedding_{section}"] = str(emb_path)
-    return embeddings, spatial, spot_indices, obs_meta, summary, sources, section_order
+    from data_io.large_results import load_spatch_inputs as read
+    return read(input_dir, section_order)
 
 
 def load_spatch_metadata(metadata_path: Path, id_column: str, labels) -> pd.DataFrame:
-    usecols = [
-        id_column,
-        "section",
-        "original_rna_obs_name",
-        "x",
-        "y",
-        *labels,
-    ]
-    frame = pd.read_csv(
-        metadata_path,
-        usecols=usecols,
-        dtype={
-            id_column: str,
-            "section": str,
-            "original_rna_obs_name": str,
-        },
-        low_memory=False,
-    ).rename(columns={id_column: "spot_id"})
-    frame["spot_id"] = frame["spot_id"].astype(str)
-    frame["section"] = frame["section"].astype(str)
-    frame["x"] = pd.to_numeric(frame["x"], errors="raise").astype(np.float32)
-    frame["y"] = pd.to_numeric(frame["y"], errors="raise").astype(np.float32)
-    return frame
+    from data_io.large_results import load_spatch_metadata as read
+    return read(metadata_path, id_column, labels)
 
 
 def load_spatch_embedding(embedding_paths, *, section_order, section_counts, name: str) -> np.ndarray:
-    arrays = []
-    for section in section_order:
-        array = np.load(embedding_paths[section], mmap_mode="r")
-        if array.shape[0] != section_counts[section]:
-            raise ValueError(
-                f"{name} {section}: unexpected embedding shape {array.shape}"
-            )
-        arrays.append(np.asarray(array))
-    return np.vstack(arrays)
+    from data_io.large_results import load_spatch_embedding as read
+    return read(embedding_paths, section_order=section_order, section_counts=section_counts, name=name)
 
 
 def load_requested_spatch_metadata(run_dir: Path, *, truth_labels, n_obs, section_counts) -> pd.DataFrame:
@@ -272,52 +216,19 @@ def load_requested_spatch_embedding(run_dir: Path, *, section_order, section_cou
     embedding = np.vstack(arrays)
     if not np.isfinite(embedding).all():
         raise ValueError("SPATCH embedding contains non-finite values.")
-    return embedding
+    from data_io.large_results import borrowed_input
+    return borrowed_input(embedding, evidence={"kind": "section_file_row_order", "section_order": section_order},
+        provenance={"run_dir": run_dir, "truth_status": "not_loaded"}).embedding
 
 
 def load_human_embryo(run_dir: Path):
-    summary = load_json(run_dir / "run_summary.json")
-    if summary.get("status") != "PASS" or summary.get("mode") != "train":
-        raise ValueError("Input run_summary does not describe a successful training run.")
-    if summary.get("model_mode", {}).get("modalities") != ["RNA"]:
-        raise ValueError("Expected an RNA-only model run.")
-    manifest = summary["preprocess_manifest"]
-    sections = list(summary["section_order"])
-    embeddings: dict[str, np.ndarray] = {}
-    metadata: dict[str, pd.DataFrame] = {}
-    for section in sections:
-        embedding_path = Path(summary["saved_files"]["embeddings"][section])
-        annotation_path = Path(manifest["annotation_files"][section])
-        embeddings[section] = np.load(embedding_path, mmap_mode="r")
-        header = pd.read_csv(annotation_path, nrows=0).columns
-        wanted = [
-            name for name in
-            ("section", "original_row", "obs_name", "cellid", "celltype", "stage", "x", "y")
-            if name in header
-        ]
-        metadata[section] = pd.read_csv(annotation_path, usecols=wanted)
-        if embeddings[section].ndim != 2 or embeddings[section].shape[1] != 128:
-            raise ValueError(f"{section}: unexpected embedding shape {embeddings[section].shape}.")
-        if len(embeddings[section]) != len(metadata[section]):
-            raise ValueError(f"{section}: embedding/metadata row mismatch.")
-    return summary, sections, embeddings, metadata
+    from data_io.large_results import load_human_embryo as read
+    return read(run_dir)
 
 
-def load_human_embryo_plot_metadata(
-    run_summary: dict[str, Any], sections: list[str]
-) -> dict[str, pd.DataFrame]:
-    annotation_files = run_summary["preprocess_manifest"]["annotation_files"]
-    metadata: dict[str, pd.DataFrame] = {}
-    for section in sections:
-        path = Path(annotation_files[section])
-        frame = pd.read_csv(path, usecols=["celltype", "x", "y"])
-        expected = int(run_summary["final_embedding_shapes"][section][0])
-        if len(frame) != expected:
-            raise ValueError(
-                f"{section}: annotation rows={len(frame):,}, expected={expected:,}."
-            )
-        metadata[section] = frame
-    return metadata
+def load_human_embryo_plot_metadata(run_summary: dict[str, Any], sections: list[str]) -> dict[str, pd.DataFrame]:
+    from data_io.large_results import load_human_embryo_plot_metadata as read
+    return read(run_summary, sections)
 
 
 def load_simulation_embeddings(run_dir: Path, section_order) -> dict[str, np.ndarray]:

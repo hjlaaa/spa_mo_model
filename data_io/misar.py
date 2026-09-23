@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 import anndata as ad
 import pandas as pd
+import numpy as np
+from .paired import spatial_range
 
 
 SECTION_INFO = {
@@ -88,3 +90,56 @@ def common_var_names(
     if not selected:
         raise ValueError(f"No {label} features selected.")
     return selected
+
+
+LABEL_COLUMNS = [
+    "Sample",
+    "Y",
+    "Combined_Clusters_annotation",
+    "Combined_Clusters",
+    "RNA_Clusters",
+    "ATAC_Clusters",
+]
+
+def validate_rna_atac_alignment(
+    section: str, rna: ad.AnnData, atac: ad.AnnData, secondary_modality: str = "ATAC"
+) -> dict[str, Any]:
+    if list(rna.obs_names) != list(atac.obs_names):
+        raise ValueError(f"{section}: RNA and {secondary_modality} obs_names are not identical.")
+    if "spatial" not in rna.obsm:
+        raise KeyError(f"{section}: RNA is missing obsm['spatial'].")
+    if "spatial" not in atac.obsm:
+        raise KeyError(f"{section}: {secondary_modality} is missing obsm['spatial'].")
+    rna_spatial = np.asarray(rna.obsm["spatial"])
+    atac_spatial = np.asarray(atac.obsm["spatial"])
+    if rna_spatial.shape != atac_spatial.shape:
+        raise ValueError(f"{section}: RNA and {secondary_modality} spatial shapes differ.")
+    spatial_match = bool(np.allclose(rna_spatial, atac_spatial))
+    if not spatial_match:
+        raise ValueError(f"{section}: RNA and {secondary_modality} spatial coordinates differ.")
+    label_summary = {}
+    for column in LABEL_COLUMNS:
+        if column == "ATAC_Clusters":
+            column = f"{secondary_modality}_Clusters"
+        if column in rna.obs:
+            label_summary[column] = {
+                "n_unique": int(rna.obs[column].astype(str).nunique(dropna=False)),
+                "top_counts": {
+                    str(key): int(value)
+                    for key, value in rna.obs[column].astype(str).value_counts(dropna=False).head(20).items()
+                },
+            }
+    return {
+        "spot_count": int(rna.n_obs),
+        "obs_names_match": True,
+        "spatial_shape": list(rna_spatial.shape),
+        "spatial_match": spatial_match,
+        "spatial_range": spatial_range(rna_spatial),
+        "labels": label_summary,
+    }
+
+
+
+def rename_section_keys(mapping: Mapping[str, Any], section_order: list[str]) -> dict[str, Any]:
+    key_map = {f"s{idx + 1}": section for idx, section in enumerate(section_order)}
+    return {key_map.get(section, section): value for section, value in mapping.items()}

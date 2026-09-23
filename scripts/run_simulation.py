@@ -16,10 +16,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts import run_misar_seq as misar
+from training.entry_defaults import simulation_defaults as _entry_defaults
+from scripts import multisection_cli as misar
+from scripts.multisection_entry import run_multisection_entry
+from data_io.misar_preparation import MultisectionSpec, prepare_multisection_dataset
 from data_io.adapted import (
     simulation_spatial_domain as _spatial_domain,
     adapt_simulation_pair as _adapt_pair, read_simulation_pair as read_pair,
+    simulation_prepared_truth,
 )
 
 
@@ -84,39 +88,8 @@ def _write_adapter_audit(data_dir: Path, output_dir: Path) -> None:
 
 
 def get_dataset_defaults():
-    """Dataset-specific values over the shared parser defaults."""
-    return {
-        "data_dir": str(DATA_DIR),
-        "output_dir": str(OUTPUT_DIR),
-        "section_order": ",".join(SECTIONS),
-        "train": True,
-        "epochs": 200,
-        "seed": 42,
-        "device": "cuda",
-        "hvg_num": 1000,
-        "hvg_num_adt": 100,
-        "lambda_contrast": 0.1,
-        "candidate_backend": "faiss_flat",
-        "initial_modality_candidate_k": 100,
-        "candidate_k": 200,
-        "attention_topk": 10,
-        "spatial_knn_k": 10,
-        "graphsage_edge_batch_size": 100000,
-        "training_loss_only": True,
-        "decoder_chunk_size": 2048,
-        "ot_attention_source_chunk_size": 1024,
-        "checkpoint_ot_attention": True,
-        "checkpoint_encoder_fusion": True,
-        "checkpoint_decoder_chunks": True,
-        "checkpoint_graph_encoder": True,
-        "amp_dtype": "bf16",
-        "cache_spatial_graphs": True,
-        "save_candidate_qc": True,
-        "save_outputs": True,
-        "save_embeddings": True,
-        "save_ot_prior_topk": True,
-        "log_cuda_memory": True,
-    }
+    """Compatibility entry: defaults are owned by training.entry_defaults."""
+    return _entry_defaults(data_dir=DATA_DIR, output_dir=OUTPUT_DIR, sections=SECTIONS)
 
 
 def parse_args(argv: list[str] | None = None):
@@ -141,7 +114,7 @@ def main(argv: list[str] | None = None) -> None:
         secondary_modality="Protein", secondary_name="adt",
     )
     _write_adapter_audit(Path(args.data_dir), Path(args.output_dir))
-    misar.run_misar_pipeline(
+    run_multisection_entry(
         args,
         read_pair=read_pair,
         section_info=section_info,
@@ -149,6 +122,12 @@ def main(argv: list[str] | None = None) -> None:
         secondary_modality="Protein",
         secondary_name="adt",
         run_config=run_config,
+        prepare_dataset=prepare_multisection_dataset,
+        input_spec=MultisectionSpec(
+            section_order=run_config["section_order"], section_info=section_info,
+            read_pair=read_pair, secondary_modality="Protein", secondary_name="adt",
+            truth_provider=simulation_prepared_truth,
+        ),
     )
 
 if __name__ == "__main__":

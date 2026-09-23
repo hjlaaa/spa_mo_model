@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # Test-process execution contract, not a production config change.
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 from tools.validation import replay_model as b, noop_config_projection, retired_config_projection
-from scripts import run_spatch as spatch
 import torch
 import numpy as np
 
@@ -146,7 +145,7 @@ def specifications(bundle):
 
 def execute(bundle):
     actual, metadata = {}, {}
-    helper = b.crc if bundle["profile"] == "spatch_bf16" else b.mouse
+    helper = b.fit_runtime
     for name, case, variant, chunked, checkpoint, overrides in specifications(bundle):
         inputs = bundle["cases"][case]
         try:
@@ -163,7 +162,7 @@ def execute(bundle):
                 del init_model
                 actual[f"{case}/refresh_helper"] = b.sparse_probe(model, inputs, bundle["runner_args"], final, helper_module=helper)
                 with torch.no_grad():
-                    after = b.crc.run_one_forward(
+                    after = b.fit_runtime.run_one_forward(
                         model, inputs["feature_dict"], inputs["spatial_loc_dict"], None, inputs["section_order"],
                         epoch=100, decoder_chunk_size=meta["fit_runtime_args"]["decoder_chunk_size"],
                         ot_attention_source_chunk_size=meta["fit_runtime_args"]["ot_attention_source_chunk_size"],

@@ -9,7 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts import run_crc_stereocite as crc
+from training.entry_defaults import paired_rna_protein_defaults as _entry_defaults
+from scripts import paired_cli as crc
+from scripts.paired_entry import run_paired_entry
+from data_io.paired_preparation import PairSpec, prepare_paired_dataset
 from data_io.paired import (
     read_lymph_pair, prepare_rna_gene_ids, filter_globally_nonzero_genes,
 )
@@ -28,42 +31,8 @@ SAMPLES = {
 
 
 def get_dataset_defaults(*, data_dir=DATA_DIR, output_dir=OUTPUT_DIR):
-    """Dataset-specific values over the shared parser defaults."""
-    return {
-        'data_dir': str(data_dir),
-        'output_dir': str(output_dir),
-        'train': True,
-        'epochs': 200,
-        'seed': 42,
-        'device': 'cuda',
-        'max_shared_genes': 20000,
-        'hvg_num': 3000,
-        'lambda_contrast': 0.1,
-        'candidate_backend': 'faiss_ivf',
-        'faiss_nlist': 256,
-        'faiss_nprobe': 32,
-        'faiss_train_sample_size': 10000,
-        'faiss_query_batch_size': 2048,
-        'initial_modality_candidate_k': 100,
-        'candidate_k': 200,
-        'attention_topk': 10,
-        'spatial_knn_k': 10,
-        'graphsage_edge_batch_size': 100000,
-        'training_loss_only': True,
-        'decoder_chunk_size': 2048,
-        'ot_attention_source_chunk_size': 1024,
-        'checkpoint_ot_attention': True,
-        'checkpoint_encoder_fusion': True,
-        'checkpoint_decoder_chunks': True,
-        'checkpoint_graph_encoder': True,
-        'amp_dtype': 'bf16',
-        'cache_spatial_graphs': True,
-        'save_candidate_qc': True,
-        'save_outputs': True,
-        'save_embeddings': True,
-        'save_ot_prior_topk': True,
-        'log_cuda_memory': True,
-    }
+    """Compatibility entry: defaults are owned by training.entry_defaults."""
+    return _entry_defaults(data_dir=data_dir, output_dir=output_dir)
 
 
 def parse_args(
@@ -81,12 +50,12 @@ def parse_args(
 def main(argv=None) -> None:
     args = parse_args(argv)
     run_config = crc.resolve_run_config(args, samples=SAMPLES, dataset_name="Human Lymph Node")
-    crc.run_crc_pipeline(
-        args, samples=SAMPLES, read_pair=read_lymph_pair,
-        prepare_rna=prepare_rna_gene_ids,
-        filter_shared_genes=filter_globally_nonzero_genes,
+    run_paired_entry(
+        args,
         status_prefix="HUMAN_LYMPH_NODE",
         run_config=run_config,
+        prepare_dataset=prepare_paired_dataset,
+        pair_spec=PairSpec(SAMPLES, read_lymph_pair, prepare_rna_gene_ids, filter_globally_nonzero_genes),
     )
 
 

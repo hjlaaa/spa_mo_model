@@ -32,71 +32,39 @@ from data_io.datasets import (
     summarize_feature_dict,
     summarize_spatial_loc_dict,
 )
+from data_io.configured_preparation import (
+    MouseBrainInput, prepare_dataset,
+    subset_section_result as _subset_section_result,
+    build_mousebrain_sections as _build_mousebrain_sections,
+    preprocess_mousebrain as _preprocess_mousebrain,
+)
 from model.stage_model import StageMultiModalModel
 from model.tensor_utils import tensor_to_numpy
 from data_io.common import ensure_dir
+from training import artifacts as _artifacts
+from training.mousebrain_task import (
+    run_mousebrain_training_task, json_safe, collect_alignment_summary,
+    summarize_outputs, save_embeddings, save_ot_prior_topk, save_run_artifacts,
+)
 from training.fit import (
     initialize_model_ot_prior, lambda_for_epoch, sparse_prior_kwargs,
     train_small_crc_model, update_model_ot_prior,
 )
+from training.entry_defaults import mousebrain_defaults as _entry_defaults
 from training.config import (
     load_json, resolve_model_config, resolve_option_values, config_source_layers, parse_dataset_args,
-    add_feature_graph_argument,
 )
 
 
-MODEL_DEFAULTS = {"training": {"epochs": 5}, "uot": {"max_iter": 100}}
-UOT_HELPER_DEFAULTS = {
-    "candidate_backend": "faiss_ivf",
-    "initial_modality_candidate_k": 100,
-    "candidate_k": 200,
-    "faiss_nlist": 256,
-    "faiss_nprobe": 32,
-    "faiss_device": "auto",
-    "faiss_train_sample_size": 10000,
-    "faiss_query_batch_size": 2048,
-    "stabilizer": 1e-8,
-}
+from training.entry_defaults import MOUSEBRAIN_MODEL_DEFAULTS as MODEL_DEFAULTS
+from training.entry_defaults import MOUSEBRAIN_UOT_HELPER_DEFAULTS as UOT_HELPER_DEFAULTS
 
-TRAINING_DEFAULTS = {
-    "seed": 42,
-    "max_spots_per_section": None,
-    "output_dir": str(PROJECT_ROOT / "results" / "mousebrain_test"),
-}
+from training.entry_defaults import MOUSEBRAIN_TRAINING_DEFAULTS as TRAINING_DEFAULTS
 
 
 def get_dataset_defaults():
-    """Current entry defaults; suite arguments remain explicit overrides."""
-    return {
-        'config': None,
-        'dry_run': False,
-        'epochs': None,
-        'max_spots_per_section': None,
-        'lambda_contrast': None,
-        'lambda_contrast_schedule': None,
-        'device': None,
-        'output_dir': None,
-        'seed': None,
-        'candidate_backend': None,
-        'initial_modality_candidate_k': None,
-        'candidate_k': None,
-        'attention_topk': None,
-        'faiss_nlist': None,
-        'faiss_nprobe': None,
-        'faiss_device': None,
-        'faiss_train_sample_size': None,
-        'faiss_query_batch_size': None,
-        'uot_epsilon': None,
-        'uot_tau_a': None,
-        'uot_tau_b': None,
-        'uot_max_iter': None,
-        'uot_stabilizer': None,
-        'update_interval': None,
-        'spatial_knn_k': None,
-        'post_ot_graphsage_scale': None,
-        'save_ot_prior_topk': False,
-        'ot_prior_output_dir': None,
-    }
+    """Compatibility entry: defaults are owned by training.entry_defaults."""
+    return _entry_defaults()
 
 
 def parse_args(argv=None):
@@ -151,7 +119,6 @@ def parse_args(argv=None):
         default=None,
         help="Optional directory for sparse top-k OT prior files; defaults to output_dir/ot_prior_topk.",
     )
-    add_feature_graph_argument(parser)
     return parse_dataset_args(parser, argv, get_dataset_defaults())
 
 
@@ -180,18 +147,6 @@ def parse_lambda_contrast_schedule(schedule_text: str | None):
     return schedule
 
 
-def json_safe(value):
-    if isinstance(value, torch.Tensor):
-        if value.ndim == 0:
-            return float(value.detach().cpu())
-        return list(value.shape)
-    if isinstance(value, np.ndarray):
-        return list(value.shape)
-    if isinstance(value, dict):
-        return {str(key): json_safe(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [json_safe(item) for item in value]
-    return value
 
 
 def seed_everything(seed: int) -> None:
@@ -203,112 +158,20 @@ def seed_everything(seed: int) -> None:
 
 
 def subset_section_result(section_result: dict[str, Any], max_spots: int | None):
-    if max_spots is None:
-        return section_result
-    if max_spots <= 0:
-        raise ValueError("--max_spots_per_section must be positive.")
-
-    subset_modalities = {}
-    for modality, adata in section_result["modalities"].items():
-        if adata is None:
-            subset_modalities[modality] = None
-            continue
-        if adata.n_obs < max_spots:
-            raise ValueError(
-                f"{section_result['section_id']} {modality} has only {adata.n_obs} spots, "
-                f"cannot take first {max_spots}."
-            )
-        subset_modalities[modality] = adata[:max_spots].copy()
-
-    section_result = dict(section_result)
-    section_result["modalities"] = subset_modalities
-    section_result["messages"] = list(section_result.get("messages", [])) + [
-        f"{section_result['section_id']}: subset to first {max_spots} spots for all modalities"
-    ]
-    return section_result
+    """Compatibility delegate to the data_io preparation implementation."""
+    return _subset_section_result(section_result, max_spots)
 
 
-def collect_alignment_summary(section_results):
-    summary = {}
-    for result in section_results:
-        section_id = result["section_id"]
-        modalities = result["modalities"]
-        rna = modalities["RNA"]
-        meta = modalities["Metabolite"]
-        he = modalities["HE"]
-        summary[section_id] = {
-            "rna_spots": int(rna.n_obs),
-            "metabolite_spots": int(meta.n_obs),
-            "he_spots": int(he.n_obs),
-            "obs_names_match": list(rna.obs_names) == list(meta.obs_names) == list(he.obs_names),
-            "spatial_match": bool(
-                np.array_equal(rna.obsm["spatial"], meta.obsm["spatial"])
-                and np.array_equal(rna.obsm["spatial"], he.obsm["spatial"])
-            ),
-            "uni_feature_shape": list(he.X.shape),
-            "metabolite_feature_shape": list(meta.X.shape),
-            "rna_feature_shape": list(rna.X.shape),
-        }
-    return summary
 
 
 def build_mousebrain_sections(config: Mapping[str, Any], max_spots: int | None):
-    misplaced = {
-        "n_comps", "hvg_num", "hvg_num_by_modality", "target_sum", "use_harmony",
-        "spatial_key", "uni_feature_key", "rna_gene_id_key",
-    }.intersection(config)
-    if misplaced:
-        raise ValueError(
-            f"MouseBrain expects these fields inside preprocessing: {sorted(misplaced)}"
-        )
-    preprocessing = config.get("preprocessing", {})
-    spatial_key = preprocessing.get("spatial_key", "spatial")
-    uni_feature_key = preprocessing.get("uni_feature_key", "uni_feature")
-    rna_gene_id_key = preprocessing.get("rna_gene_id_key", "gene_ids")
-
-    section_results = []
-    messages = []
-    for section in config["sections"]:
-        result = build_mousebrain_section(
-            section_id=section["section_id"],
-            rna_path=section["rna_input"],
-            metabolite_path=section["metabolite_input"],
-            spatial_key=spatial_key,
-            uni_feature_key=uni_feature_key,
-            rna_gene_id_key=rna_gene_id_key,
-        )
-        result = subset_section_result(result, max_spots=max_spots)
-        section_results.append(result)
-        messages.extend(result.get("messages", []))
-    return section_results, messages
+    """Compatibility delegate to the data_io preparation implementation."""
+    return _build_mousebrain_sections(config, max_spots)
 
 
 def preprocess_mousebrain(config: Mapping[str, Any], max_spots: int | None):
-    reject_unsupported_preprocess_config(config)
-    preprocessing = config.get("preprocessing", {})
-    if config.get("metacell", False) or preprocessing.get("metacell", False):
-        raise ValueError("metacell=true is no longer supported; use full-spot inputs.")
-    section_results, messages = build_mousebrain_sections(config, max_spots=max_spots)
-    data_dict = build_cosie_data_dict(section_results)
-    feature_dict, spatial_loc_dict, processed_data_dict = load_cosie_style_data(
-        data_dict,
-        n_comps=preprocessing.get("n_comps", 50),
-        hvg_num=preprocessing.get("hvg_num", 3000),
-        hvg_num_by_modality=preprocessing.get("hvg_num_by_modality"),
-        target_sum=preprocessing.get("target_sum"),
-        use_harmony=preprocessing.get("use_harmony", True),
-    )
-    section_ids = [result["section_id"] for result in section_results]
-    feature_dict = restore_section_keys(feature_dict, section_ids)
-    spatial_loc_dict = restore_section_keys(spatial_loc_dict, section_ids)
-    return {
-        "section_results": section_results,
-        "messages": messages,
-        "data_dict": data_dict,
-        "feature_dict": feature_dict,
-        "spatial_loc_dict": spatial_loc_dict,
-        "processed_data_dict": processed_data_dict,
-    }
+    """Compatibility delegate to the data_io preparation implementation."""
+    return _preprocess_mousebrain(config, max_spots)
 
 
 def build_model_config(
@@ -324,7 +187,6 @@ def build_model_config(
     uot_max_iter: int | None = None,
     spatial_knn_k: int | None = None,
     post_ot_graphsage_scale: float | None = None,
-    feature_graph: bool | None = None,
 ):
     # Preserve MouseBrain entry defaults, then merge model and input layers.
     model_config = get_default_model_config()
@@ -345,7 +207,6 @@ def build_model_config(
         },
         "graph": {"knn_neighbors_spatial": spatial_knn_k},
         "graphsage": {"post_ot_graphsage_scale": post_ot_graphsage_scale},
-        "feature_graph": {"enabled": feature_graph},
     }
     model_config = resolve_model_config(
         base=model_config,
@@ -373,7 +234,6 @@ def resolve_run_config(config: Mapping[str, Any], args):
         uot_max_iter=args.uot_max_iter,
         spatial_knn_k=args.spatial_knn_k,
         post_ot_graphsage_scale=args.post_ot_graphsage_scale,
-        feature_graph=args.feature_graph,
     )
     resolved = argparse.Namespace(**vars(args))
     training = model_config["training"]
@@ -405,119 +265,12 @@ def resolve_run_config(config: Mapping[str, Any], args):
     return model_config, resolved
 
 
-def summarize_outputs(outputs):
-    return {
-        "final_embeddings": {
-            section: list(tensor.shape)
-            for section, tensor in outputs["final_embeddings"].items()
-        },
-        "fused_embeddings": {
-            section: list(tensor.shape)
-            for section, tensor in outputs["fused_embeddings"].items()
-        },
-        "graphsage_embeddings": {
-            section: list(tensor.shape)
-            for section, tensor in outputs["graphsage_embeddings"].items()
-        },
-        "reconstructions": {
-            section: {
-                modality: list(tensor.shape)
-                for modality, tensor in modalities.items()
-            }
-            for section, modalities in outputs["reconstructions"].items()
-        },
-        "ot_prior_keys": [list(key) for key in (outputs["ot_prior"] or {}).keys()],
-        "losses": {
-            key: float(value.detach().cpu())
-            for key, value in outputs["losses"].items()
-        },
-        "messages": outputs.get("messages", []),
-    }
 
 
-def save_embeddings(output_dir: Path, final_embeddings: Mapping[str, torch.Tensor]):
-    embedding_dir = output_dir / "final_embeddings"
-    ensure_dir(embedding_dir)
-    paths = {}
-    for section, tensor in final_embeddings.items():
-        path = embedding_dir / f"{section}_final_embedding.npy"
-        np.save(path, tensor_to_numpy(tensor))
-        paths[section] = str(path)
-    return paths
 
 
-def save_ot_prior_topk(
-    output_dir: Path,
-    ot_prior: Mapping[tuple[str, str], Mapping[str, Any]] | None,
-    final_embeddings: Mapping[str, torch.Tensor],
-    run_mode: str,
-):
-    """Save sparse top-k UOT priors without saving dense coupling matrices."""
-
-    ensure_dir(output_dir)
-    files: dict[str, dict[str, str]] = {}
-    if not ot_prior:
-        return files
-
-    note = "Saved sparse top-k UOT prior from model.ot_prior after final evaluation."
-    for (source_section, target_section), prior in ot_prior.items():
-        pair_key = f"{source_section}_to_{target_section}"
-        topk_idx = prior["topk_idx"].detach().cpu().numpy()
-        topk_weight = prior["topk_weight"].detach().cpu().numpy()
-        confidence = prior["confidence"].detach().cpu().numpy()
-        row_mass = prior["row_mass"].detach().cpu().numpy()
-
-        paths = {
-            "topk_idx": output_dir / f"{pair_key}_topk_idx.npy",
-            "topk_weight": output_dir / f"{pair_key}_topk_weight.npy",
-            "confidence": output_dir / f"{pair_key}_confidence.npy",
-            "row_mass": output_dir / f"{pair_key}_row_mass.npy",
-            "metadata": output_dir / f"{pair_key}_metadata.json",
-        }
-        np.save(paths["topk_idx"], topk_idx)
-        np.save(paths["topk_weight"], topk_weight)
-        np.save(paths["confidence"], confidence)
-        np.save(paths["row_mass"], row_mass)
-
-        metadata = {
-            "source_section": source_section,
-            "target_section": target_section,
-            "topk": int(topk_idx.shape[1]) if topk_idx.ndim == 2 else None,
-            "n_source": int(final_embeddings[source_section].shape[0]),
-            "n_target": int(final_embeddings[target_section].shape[0]),
-            "modalities_used": list(prior.get("modalities_used", [])),
-            "run_mode": run_mode,
-            "note": note,
-        }
-        metadata.update(prior.get("metadata", {}))
-        with open(paths["metadata"], "w", encoding="utf-8") as handle:
-            json.dump(json_safe(metadata), handle, indent=2, ensure_ascii=False)
-
-        files[pair_key] = {name: str(path) for name, path in paths.items()}
-
-    return files
 
 
-def save_run_artifacts(
-    output_dir: Path,
-    config_path: Path,
-    config: Mapping[str, Any],
-    summary: Mapping[str, Any],
-    history: list[dict[str, float]] | None,
-    final_embeddings: Mapping[str, torch.Tensor],
-):
-    ensure_dir(output_dir)
-    config_copy = output_dir / "mousebrain_config_used.json"
-    shutil.copyfile(config_path, config_copy)
-    embedding_paths = save_embeddings(output_dir, final_embeddings)
-    full_summary = dict(summary)
-    full_summary["config_copy"] = str(config_copy)
-    full_summary["final_embedding_paths"] = embedding_paths
-    with open(output_dir / "run_summary.json", "w", encoding="utf-8") as handle:
-        json.dump(json_safe(full_summary), handle, indent=2, ensure_ascii=False)
-    if history is not None:
-        with open(output_dir / "loss_history.json", "w", encoding="utf-8") as handle:
-            json.dump(history, handle, indent=2, ensure_ascii=False)
 
 
 def run_mousebrain(args):
@@ -555,11 +308,12 @@ def run_mousebrain(args):
         if output_dir.name != epoch_dir_name:
             output_dir = output_dir / epoch_dir_name
 
-    prep = preprocess_mousebrain(config, max_spots=max_spots)
-    feature_dict = prep["feature_dict"]
-    spatial_loc_dict = prep["spatial_loc_dict"]
-    processed_data_dict = prep["processed_data_dict"]
-    section_order = config.get("section_order") or sorted(feature_dict.keys())
+    prepared = prepare_dataset(MouseBrainInput(config, max_spots))
+    prep = prepared.compatibility_context["legacy_result"]
+    feature_dict = prepared.feature_dict
+    spatial_loc_dict = prepared.spatial_loc_dict
+    processed_data_dict = prepared.processed_data_dict
+    section_order = prepared.section_order
     lambda_schedule = parse_lambda_contrast_schedule(args.lambda_contrast_schedule)
     epochs = int(model_config["training"]["epochs"])
 
@@ -590,191 +344,10 @@ def run_mousebrain(args):
         },
     }
 
-    model = StageMultiModalModel(config=model_config, feature_dict=feature_dict)
-    initial_prior = initialize_model_ot_prior(
-        model,
-        feature_dict,
-        section_order,
-        args,
+    return run_mousebrain_training_task(
+        {"summary": resolved_config, "model_config": model_config, "runner": args},
+        prepared, lambda_schedule=lambda_schedule,
     )
-
-    with torch.no_grad():
-        dry_outputs = model(
-            feature_dict=feature_dict,
-            spatial_loc_dict=spatial_loc_dict,
-            processed_data_dict=processed_data_dict,
-            section_order=section_order,
-            epoch=0,
-        )
-
-    first_parameter = next(model.parameters())
-    resolved_config["execution"]["device"] = str(first_parameter.device)
-    resolved_config["execution"]["parameter_dtype"] = str(first_parameter.dtype)
-
-    preprocessing_summary = {
-        "dataset_name": config.get("dataset_name", "MouseBrain"),
-        "section_order": section_order,
-        "max_spots_per_section": max_spots,
-        "use_harmony": config.get("preprocessing", {}).get("use_harmony", True),
-        "hvg_num_by_modality": config.get("preprocessing", {}).get("hvg_num_by_modality"),
-        "lambda_contrast": model_config["loss"]["lambda_contrast"],
-        "lambda_contrast_schedule": args.lambda_contrast_schedule,
-        "device": model_config["training"]["device"],
-        "seed": int(args.seed),
-        "ot_prior_mode": "candidate_sparse",
-        "bidirectional_ot_attention": True,
-        "candidate_backend": str(args.candidate_backend),
-        "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
-        "candidate_k": int(args.candidate_k),
-        "attention_topk": int(args.attention_topk),
-        "dynamic_candidate_source": "ot",
-        "uot_epsilon": float(args.uot_epsilon),
-        "uot_tau_a": float(args.uot_tau_a),
-        "uot_tau_b": float(args.uot_tau_b),
-        "uot_max_iter": int(args.uot_max_iter),
-        "update_interval": int(args.update_interval),
-        "spatial_knn_k": int(args.spatial_knn_k),
-        "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
-        "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
-        "pre_post_graphsage_parameter_sharing": False,
-        "ot_refresh_embedding_key": "ot_embeddings",
-        "topology_aware_refresh_enabled": bool(
-            model_config["uot"].get("topology_aware_refresh_enabled", False)
-        ),
-        "topology_context_weight": float(
-            model_config["uot"].get("topology_context_weight", 0.0)
-        ),
-        "initial_ot_prior_metadata": {
-            f"{left}_to_{right}": json_safe(prior.get("metadata", {}))
-            for (left, right), prior in initial_prior.items()
-        },
-        "data_dict": summarize_data_dict(prep["data_dict"]),
-        "feature_dict": summarize_feature_dict(feature_dict),
-        "spatial_loc_dict": summarize_spatial_loc_dict(spatial_loc_dict),
-        "processed_data_dict_generated": processed_data_dict is not None,
-        "alignment": collect_alignment_summary(prep["section_results"]),
-        "adapter_messages": prep["messages"],
-    }
-
-    if args.dry_run:
-        ot_prior_topk_files = {}
-        ot_prior_topk_dir = None
-        if args.save_ot_prior_topk:
-            ot_prior_topk_dir = Path(args.ot_prior_output_dir) if args.ot_prior_output_dir else output_dir / "ot_prior_topk"
-            ot_prior_topk_files = save_ot_prior_topk(
-                output_dir=ot_prior_topk_dir,
-                ot_prior=dry_outputs["ot_prior"],
-                final_embeddings=dry_outputs["final_embeddings"],
-                run_mode="dry_run",
-            )
-        summary = {
-            "mode": "dry_run",
-            "resolved_config": resolved_config,
-            "preprocessing": preprocessing_summary,
-            "forward": summarize_outputs(dry_outputs),
-            "loss_finite": bool(torch.isfinite(dry_outputs["losses"]["total_loss"]).item()),
-            "saved_ot_prior_topk": bool(args.save_ot_prior_topk),
-        }
-        if args.save_ot_prior_topk:
-            summary["ot_prior_topk_dir"] = str(ot_prior_topk_dir)
-            summary["ot_prior_topk_files"] = ot_prior_topk_files
-        save_run_artifacts(
-            output_dir=output_dir,
-            config_path=config_path,
-            config=config,
-            summary=summary,
-            history=None,
-            final_embeddings=dry_outputs["final_embeddings"],
-        )
-        print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
-        print("MOUSEBRAIN_DRY_RUN: PASS")
-        return summary
-
-    execution = resolved_config["execution"]
-    fit_args = argparse.Namespace(
-        **vars(args),
-        lr=float(model_config["training"]["lr"]),
-        weight_decay=float(model_config["training"]["weight_decay"]),
-        amp_dtype=execution["amp_dtype"],
-        training_loss_only=execution["training_loss_only"],
-        decoder_chunk_size=execution["decoder_chunk_size"] or 0,
-        ot_attention_source_chunk_size=execution["ot_attention_source_chunk_size"] or 0,
-        cache_spatial_graphs=execution["cache_spatial_graphs"],
-        checkpoint_ot_attention=execution["checkpoint_ot_attention"],
-        checkpoint_encoder_fusion=execution["checkpoint_encoder_fusion"],
-        checkpoint_decoder_chunks=execution["checkpoint_decoder_chunks"],
-        checkpoint_graph_encoder=execution["checkpoint_graph_encoder"],
-        log_every=1,
-        log_cuda_memory_detail=False,
-    )
-    history, final_outputs, ot_updates = train_small_crc_model(
-        model, feature_dict, spatial_loc_dict, processed_data_dict, section_order,
-        fit_args,
-        lambda_contrast_schedule=lambda_schedule,
-        clear_step_state=False,
-        record_elapsed_time=False,
-        allow_empty_epochs=True,
-    )
-
-    ot_prior_topk_files = {}
-    ot_prior_topk_dir = None
-    if args.save_ot_prior_topk:
-        ot_prior_topk_dir = Path(args.ot_prior_output_dir) if args.ot_prior_output_dir else output_dir / "ot_prior_topk"
-        ot_prior_topk_files = save_ot_prior_topk(
-            output_dir=ot_prior_topk_dir,
-            ot_prior=final_outputs["ot_prior"],
-            final_embeddings=final_outputs["final_embeddings"],
-            run_mode="training_final_eval",
-        )
-
-    summary = {
-        "mode": "train",
-        "resolved_config": resolved_config,
-        "epochs": epochs,
-        "seed": int(args.seed),
-        "ot_prior_mode": "candidate_sparse",
-        "bidirectional_ot_attention": True,
-        "candidate_backend": str(args.candidate_backend),
-        "initial_modality_candidate_k": int(args.initial_modality_candidate_k),
-        "candidate_k": int(args.candidate_k),
-        "attention_topk": int(args.attention_topk),
-        "dynamic_candidate_source": "ot",
-        "uot_epsilon": float(args.uot_epsilon),
-        "uot_tau_a": float(args.uot_tau_a),
-        "uot_tau_b": float(args.uot_tau_b),
-        "uot_max_iter": int(args.uot_max_iter),
-        "update_interval": int(args.update_interval),
-        "spatial_knn_k": int(args.spatial_knn_k),
-        "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
-        "architecture": "MLP+pre_OT_GraphSAGE+OT_attention+post_OT_GraphSAGE+MLP_decoder",
-        "pre_post_graphsage_parameter_sharing": False,
-        "ot_refresh_embedding_key": "ot_embeddings",
-        "topology_aware_refresh_enabled": bool(
-            model_config["uot"].get("topology_aware_refresh_enabled", False)
-        ),
-        "topology_context_weight": float(
-            model_config["uot"].get("topology_context_weight", 0.0)
-        ),
-        "ot_updates": ot_updates,
-        "preprocessing": preprocessing_summary,
-        "forward": summarize_outputs(final_outputs),
-        "loss_finite": bool(torch.isfinite(final_outputs["losses"]["total_loss"]).item()),
-        "saved_ot_prior_topk": bool(args.save_ot_prior_topk),
-    }
-    if args.save_ot_prior_topk:
-        summary["ot_prior_topk_dir"] = str(ot_prior_topk_dir)
-        summary["ot_prior_topk_files"] = ot_prior_topk_files
-    save_run_artifacts(
-        output_dir=output_dir,
-        config_path=config_path,
-        config=config,
-        summary=summary,
-        history=history,
-        final_embeddings=final_outputs["final_embeddings"],
-    )
-    print(json.dumps(json_safe(summary), indent=2, ensure_ascii=False))
-    print("MOUSEBRAIN_TRAINING: PASS")
-    return summary
 
 
 def main():

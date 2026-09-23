@@ -4,6 +4,8 @@ These retain different sampling and spatial diagnostic protocols. They receive
 P6a data and use P6b standardization/clustering/metrics; no method data is loaded here.
 """
 from __future__ import annotations
+from analysis.exact_kmeans_workflow import execute_exact_kmeans_scopes
+from data_io import saved_assignments as sa
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -485,7 +487,7 @@ def crc_run_scheme(
     for k in independent_ks:
         rows = []
         for section in CRC_SECTIONS:
-            labels = pd.read_csv(
+            labels = sa.read_assignment_table(
                 clustering_root
                 / f"independent_k{k}"
                 / f"labels_{section}.csv",
@@ -680,154 +682,15 @@ def hln_run_scheme(data: Any, scheme: str, *, joint_ks=None, independent_ks=None
     joint_ks = HLN_METRIC_KS if joint_ks is None else list(joint_ks)
     independent_ks = HLN_PLOT_KS if independent_ks is None else list(independent_ks)
     out = data.output_root / scheme
-    cluster_root = out / "clustering"
-    metrics_root = out / "metrics"
-    cluster_root.mkdir(parents=True)
-    metrics_root.mkdir()
-    metric_rows: list[dict[str, Any]] = []
-    spatial_rows: list[dict[str, Any]] = []
-    scalers: dict[str, np.ndarray] = {}
-
-    joint_space, joint_scaler = metric_space(data.embedding, scheme)
-    if joint_scaler is not None:
-        scalers.update(scaler_payload(joint_scaler, "joint"))
-    section_asw = safe_asw(joint_space, data.sections)
-
-    for k in joint_ks:
-        labels_all = kmeans_labels(joint_space, n_clusters=k, random_state=HLN_SEED, n_init=HLN_N_INIT, max_iter=HLN_MAX_ITER)
-        kdir = cluster_root / f"joint_k{k}"
-        kdir.mkdir()
-        all_mask = np.ones(len(labels_all), dtype=bool)
-        hln_save_labels(kdir / "labels_all.csv", data, all_mask, labels_all)
-        metric_rows.append(
-            {
-                "mode": "joint",
-                "scope": "combined",
-                "k": k,
-                "n_obs": len(labels_all),
-                "embedding_dim": data.embedding.shape[1],
-                **internal(joint_space, labels_all),
-                "section_ari": adjusted_rand_score(data.sections, labels_all),
-                "section_nmi": normalized_mutual_info_score(
-                    data.sections, labels_all
-                ),
-                "section_asw": section_asw,
-                "metric_space": scheme,
-                "labels_path": str(kdir / "labels_all.csv"),
-            }
-        )
-        count_rows = []
-        for section in HLN_SECTIONS:
-            mask = data.sections == section
-            labels = labels_all[mask]
-            hln_save_labels(kdir / f"labels_{section}.csv", data, mask, labels)
-            if k in HLN_PLOT_KS:
-                plot_hln_spatial(
-                    kdir / f"spatial_{section}.png",
-                    data.coords[mask],
-                    labels,
-                    f"{data.name} {scheme} joint K={k} {section}",
-                )
-            spatial_rows.append(
-                {
-                    "mode": "joint",
-                    "k": k,
-                    "section": section,
-                    "n_obs": int(mask.sum()),
-                    "spatial_neighbor_k": HLN_SPATIAL_NEIGHBOR_K,
-                    "neighbor_same_cluster_fraction": hln_spatial_agreement(
-                        data.coords[mask], labels
-                    ),
-                    "labels_path": str(kdir / f"labels_{section}.csv"),
-                }
-            )
-            for cluster, count in zip(*np.unique(labels, return_counts=True)):
-                count_rows.append(
-                    {
-                        "section": section,
-                        "cluster": int(cluster),
-                        "count": int(count),
-                        "fraction": count / int(mask.sum()),
-                    }
-                )
-        pd.DataFrame(count_rows).to_csv(kdir / "cluster_counts.csv", index=False)
-
-    for k in independent_ks:
-        kdir = cluster_root / f"independent_k{k}"
-        kdir.mkdir()
-        count_rows = []
-        for section in HLN_SECTIONS:
-            mask = data.sections == section
-            space, scaler = metric_space(data.embedding[mask], scheme)
-            if scaler is not None:
-                scalers.update(scaler_payload(scaler, section))
-            labels = kmeans_labels(space, n_clusters=k, random_state=HLN_SEED, n_init=HLN_N_INIT, max_iter=HLN_MAX_ITER)
-            label_path = kdir / f"labels_{section}.csv"
-            hln_save_labels(label_path, data, mask, labels)
-            plot_hln_spatial(
-                kdir / f"spatial_{section}.png",
-                data.coords[mask],
-                labels,
-                f"{data.name} {scheme} independent K={k} {section}",
-            )
-            metric_rows.append(
-                {
-                    "mode": "independent",
-                    "scope": section,
-                    "k": k,
-                    "n_obs": int(mask.sum()),
-                    "embedding_dim": data.embedding.shape[1],
-                    **internal(space, labels),
-                    "section_ari": float("nan"),
-                    "section_nmi": float("nan"),
-                    "section_asw": float("nan"),
-                    "metric_space": scheme,
-                    "labels_path": str(label_path),
-                }
-            )
-            spatial_rows.append(
-                {
-                    "mode": "independent",
-                    "k": k,
-                    "section": section,
-                    "n_obs": int(mask.sum()),
-                    "spatial_neighbor_k": HLN_SPATIAL_NEIGHBOR_K,
-                    "neighbor_same_cluster_fraction": hln_spatial_agreement(
-                        data.coords[mask], labels
-                    ),
-                    "labels_path": str(label_path),
-                }
-            )
-            for cluster, count in zip(*np.unique(labels, return_counts=True)):
-                count_rows.append(
-                    {
-                        "section": section,
-                        "cluster": int(cluster),
-                        "count": int(count),
-                        "fraction": count / int(mask.sum()),
-                    }
-                )
-        pd.DataFrame(count_rows).to_csv(kdir / "cluster_counts.csv", index=False)
-
-    metrics = pd.DataFrame(metric_rows)
-    spatial = pd.DataFrame(spatial_rows)
-    metrics.to_csv(metrics_root / "clustering_metrics.csv", index=False)
-    spatial.to_csv(metrics_root / "spatial_continuity.csv", index=False)
-    (
-        spatial.groupby(["mode", "k"], as_index=False)[
-            "neighbor_same_cluster_fraction"
-        ]
-        .mean()
-        .rename(
-            columns={
-                "neighbor_same_cluster_fraction":
-                "mean_spatial_neighbor_agreement"
-            }
-        )
-        .to_csv(metrics_root / "spatial_continuity_summary.csv", index=False)
+    execute_exact_kmeans_scopes(
+        data, scheme, section_order=HLN_SECTIONS,
+        joint_ks=joint_ks, independent_ks=independent_ks,
+        seed=HLN_SEED, n_init=HLN_N_INIT, max_iter=HLN_MAX_ITER,
+        spatial_neighbor_k=HLN_SPATIAL_NEIGHBOR_K,
+        joint_plot_ks=HLN_PLOT_KS, independent_plot_ks=None,
+        joint_mask_per_fit=True, save_labels=hln_save_labels,
+        plot_spatial=plot_hln_spatial, spatial_agreement=hln_spatial_agreement,
     )
-    if scalers:
-        np.savez_compressed(out / "scaler_parameters.npz", **scalers)
 
     config = {
         "dataset": "Human_Lymph_Node",

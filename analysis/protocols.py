@@ -28,10 +28,6 @@ SPECS = {
         "mouse_spleen", "Mouse Spleen", tuple(range(2, 13)), tuple(range(2, 13)),
         0, batch_max_samples=50000,
     ),
-    "human_lymph_node": AnalysisSpec(
-        "human_lymph_node", "Human Lymph Node", (8, 10, 12), (8, 10, 12),
-        0, batch_max_samples=50000,
-    ),
     "simulation": AnalysisSpec(
         "simulation", "Simulation", (5, 8, 10, 12), (5, 8, 10, 12),
         42, batch_seed=42,
@@ -189,7 +185,6 @@ def umap_parameters(n_neighbors: int, min_dist: float, seed: int) -> dict:
 
 # Established post-requested spatial retention; separate from the comparison K grids.
 REQUESTED_PLOT_KS = {
-    "human_lymph_node": [8, 10, 12],
     "mousebrain": [9, 10, 11], "misar_seq": [12, 14, 15],
     "mouse_spleen": [3, 5], "mouse_thymus": [5, 8, 10], "simulation": [5],
 }

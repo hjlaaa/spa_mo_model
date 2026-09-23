@@ -2,6 +2,7 @@
 """MISAR-style scalable analysis for full-spot HESTA RNA-only embeddings."""
 
 from __future__ import annotations
+from data_io import saved_assignments as sa
 from analysis.plotting import plot_celltype_reference as _plot_celltype_reference
 from analysis.plotting import plot_spatial_panels as _plot_spatial_panels
 
@@ -381,7 +382,7 @@ def run_hierarchical_analysis(
     validation_rows: list[dict[str, Any]] = []
 
     print(f"[analysis] weighted-Ward joint hierarchy from flat k={leaf_k}", flush=True)
-    joint_leaf_labels = np.load(
+    joint_leaf_labels = sa.read_assignment_array(
         output_dir / "clustering" / f"joint_k{leaf_k}" / "labels_all.npy", mmap_mode="r"
     )
     centers, counts = cluster_centers_from_labels(joint_space, joint_leaf_labels, leaf_k)
@@ -444,7 +445,7 @@ def run_hierarchical_analysis(
     cut_mappings: dict[str, dict[int, pd.DataFrame]] = {}
     for section in sections:
         print(f"[analysis] weighted-Ward independent hierarchy: {section}", flush=True)
-        leaf_labels = np.load(
+        leaf_labels = sa.read_assignment_array(
             output_dir / "clustering" / f"independent_k{leaf_k}" / f"labels_{section}.npy",
             mmap_mode="r",
         )
@@ -754,7 +755,7 @@ def analyze(args, *, model_version: str) -> None:
         if args.reuse_flat_labels and hit:
             print(f"[analysis] reusing joint labels k={k}", flush=True)
             # Copy before save_label_arrays rewrites the same labels_all.npy path.
-            labels_all = np.asarray(np.load(existing_labels, mmap_mode="r"), dtype=np.int32).copy()
+            labels_all = np.asarray(sa.read_assignment_array(existing_labels, mmap_mode="r"), dtype=np.int32).copy()
             if labels_all.shape != (total_spots,) or len(np.unique(labels_all)) != k:
                 raise ValueError(f"Existing joint k={k} labels failed shape/cluster validation.")
         else:
@@ -819,7 +820,7 @@ def analyze(args, *, model_version: str) -> None:
             hit = cache_hit(label_manifest, label_identity, [label_path])
             if args.reuse_flat_labels and hit:
                 print(f"[analysis] reusing independent labels {section} k={k}", flush=True)
-                labels = np.load(label_path, mmap_mode="r")
+                labels = sa.read_assignment_array(label_path, mmap_mode="r")
                 if labels.shape != (len(embeddings[section]),) or len(np.unique(labels)) != k:
                     raise ValueError(f"Existing independent {section} k={k} labels failed validation.")
             else:
@@ -1127,7 +1128,7 @@ def per_section_plot_clusters(
             if hit and not overwrite:
                 continue
             label_path = directory / f"labels_{section}.npy"
-            labels = np.load(label_path, mmap_mode="r")
+            labels = sa.read_assignment_array(label_path, mmap_mode="r")
             if labels.shape != (len(metadata[section]),):
                 raise ValueError(
                     f"{label_path}: shape={labels.shape}, expected "

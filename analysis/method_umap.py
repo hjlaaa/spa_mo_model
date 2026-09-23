@@ -34,6 +34,9 @@ import pandas as pd
 
 import umap
 
+from data_io.large_results import borrowed_input
+from data_io.reference_results import normalize_sections, read_reference_metadata
+from data_io.saved_assignments import read_assignment_table, read_assignment_array, selected_csv_assignments
 from analysis.plotting import plot_comparison_panel_e
 
 from analysis.cache import check_output_path, begin_analysis, finish_analysis, array_identity, frame_identity, implementation_identity
@@ -41,6 +44,7 @@ from analysis.cache import check_output_path, begin_analysis, finish_analysis, a
 from analysis.umap import fit_umap as shared_fit_umap
 
 from analysis.plotting import plot_individual
+from analysis.umap_workflow import run_method_projection
 
 METHODS = ('cosie', 'mofa', 'spamosaic', 'harmony')
 
@@ -101,93 +105,46 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 def normalize_section(dataset: str, values: pd.Series | np.ndarray) -> np.ndarray:
-    cleaned = pd.Series(values, dtype='string').astype(str)
-    if dataset == 'mousebrain':
-        cleaned = cleaned.map(MOUSEBRAIN_SECTION_ALIASES).fillna(cleaned)
-    return cleaned.to_numpy(dtype=str)
+    return normalize_sections(values, MOUSEBRAIN_SECTION_ALIASES if dataset == 'mousebrain' else None)
+
 
 def canonical_keys(sections: np.ndarray, identifiers: np.ndarray) -> np.ndarray:
-    return np.char.add(np.char.add(sections.astype(str), '\x1f'), identifiers.astype(str))
+    from data_io.reference_results import canonical_keys as read
+    return read(sections, identifiers)
 
 def load_reference(dataset: str, reference_dir: Path) -> ReferenceData:
     config = json.loads((reference_dir / 'umap_config.json').read_text())
     table_path = Path(config['coordinates_table'])
-    metadata = pd.read_csv(table_path, low_memory=False)
-    drop_columns = [column for column in metadata if column.startswith('input_') or column.startswith('integrated_UMAP') or column.startswith('joint_k')]
-    metadata = metadata.drop(columns=drop_columns)
-    metadata['section'] = normalize_section(dataset, metadata['section'])
-    metadata['spot_id'] = metadata['spot_id'].astype(str)
-    if metadata.duplicated(['section', 'spot_id']).any():
-        raise ValueError(f'{dataset}: duplicate reference section/spot_id keys.')
+    metadata = read_reference_metadata(table_path, context=dataset,
+        section_aliases=MOUSEBRAIN_SECTION_ALIASES if dataset == 'mousebrain' else None,
+        drop_prefixes=('input_', 'integrated_UMAP', 'joint_k'))
     return ReferenceData(dataset=dataset, config=config, metadata=metadata, sections=list(config['section_order']), primary_label=config['primary_biological_label'], representative_k=int(config['representative_joint_k']), reference_dir=reference_dir)
 
 def source_id_column(columns: list[str]) -> str:
-    for name in ('original_barcode', 'obs_name.1', 'obs_name', 'spot_id'):
-        if name in columns:
-            return name
-    raise KeyError(f'No spot identifier column found among {columns}.')
+    from data_io.reference_results import source_id_column as read
+    return read(columns)
 
 def feature_columns(columns: list[str], method: str) -> list[str]:
-    pattern = '^COSIE\\d+$' if method == 'cosie' else '^Factor\\d+$'
-    result = [column for column in columns if re.match(pattern, column)]
-    return sorted(result, key=lambda value: int(re.search('\\d+', value).group()))
+    from data_io.reference_results import feature_columns as read
+    return read(columns, r'^COSIE\d+$' if method == 'cosie' else r'^Factor\d+$')
 
 def selected_positions_from_keys(dataset: str, source_sections: np.ndarray, source_ids: np.ndarray, reference: ReferenceData) -> np.ndarray:
-    source_keys = canonical_keys(normalize_section(dataset, source_sections), source_ids)
-    if len(np.unique(source_keys)) != len(source_keys):
-        raise ValueError(f'{dataset}: source section/spot identifiers are not unique.')
-    reference_keys = canonical_keys(reference.metadata['section'].to_numpy(dtype=str), reference.metadata['spot_id'].to_numpy(dtype=str))
-    positions = pd.Index(source_keys).get_indexer(reference_keys)
-    if np.any(positions < 0):
-        examples = reference_keys[positions < 0][:5].tolist()
-        raise KeyError(f'{dataset}: {np.sum(positions < 0)} reference spots absent: {examples}')
-    return positions.astype(np.int64)
+    from data_io.reference_results import selected_positions_from_keys as read
+    return read(dataset, source_sections, source_ids, reference, section_aliases=MOUSEBRAIN_SECTION_ALIASES if dataset == 'mousebrain' else None)
 
 def load_generic_selected_raw(method: str, dataset: str, source_path: Path, reference: ReferenceData) -> tuple[np.ndarray, dict[str, Any]]:
-    if source_path.suffix == '.csv':
-        columns = pd.read_csv(source_path, nrows=0).columns.tolist()
-        features = feature_columns(columns, method)
-        id_column = source_id_column(columns)
-        selected_columns = list(dict.fromkeys(['section', id_column, *features]))
-        table = pd.read_csv(source_path, usecols=selected_columns, low_memory=False)
-        positions = selected_positions_from_keys(dataset, table['section'].astype(str).to_numpy(), table[id_column].astype(str).to_numpy(), reference)
-        values = table[features].to_numpy(dtype=np.float32)[positions]
-        provenance = {'source_embedding': source_path, 'source_type': 'CSV feature columns', 'feature_columns': features, 'alignment': 'exact section + spot/barcode key'}
-        return (values, provenance)
-    if source_path.suffix == '.h5ad':
-        value = ad.read_h5ad(source_path, backed='r')
-        try:
-            if 'merged_emb' not in value.obsm:
-                raise KeyError(f"{source_path}: obsm['merged_emb'] is required.")
-            id_column = source_id_column(value.obs.columns.tolist())
-            positions = selected_positions_from_keys(dataset, value.obs['section'].astype(str).to_numpy(), value.obs[id_column].astype(str).to_numpy(), reference)
-            merged = np.asarray(value.obsm['merged_emb'], dtype=np.float32)
-            values = merged[positions]
-        finally:
-            value.file.close()
-        provenance = {'source_embedding': source_path, 'source_type': "AnnData obsm['merged_emb']", 'alignment': 'exact section + spot/barcode key'}
-        return (values, provenance)
-    raise ValueError(f'Unsupported source embedding: {source_path}')
+    from data_io.reference_results import read_selected_result
+    return read_selected_result(source_path, reference, file_format={'.csv': 'csv', '.h5ad': 'h5ad'}.get(source_path.suffix),
+        feature_pattern=r'^COSIE\d+$' if method == 'cosie' else r'^Factor\d+$', context=dataset,
+        section_aliases=MOUSEBRAIN_SECTION_ALIASES if dataset == 'mousebrain' else None)
 
 def select_by_section_rows(arrays: dict[str, np.ndarray], reference: ReferenceData) -> np.ndarray:
-    result = np.empty((len(reference.metadata), next(iter(arrays.values())).shape[1]), dtype=np.float32)
-    for section in reference.sections:
-        mask = reference.metadata['section'].eq(section).to_numpy()
-        local = reference.metadata.loc[mask, 'section_row_index'].to_numpy(dtype=np.int64)
-        if local.max(initial=-1) >= len(arrays[section]):
-            raise IndexError(f'{reference.dataset}/{section}: reference row is out of range.')
-        result[mask] = np.asarray(arrays[section][local], dtype=np.float32)
-    return result
+    from data_io.reference_results import select_by_section_rows as read
+    return read(arrays, reference)
 
 def validate_section_ids(ids_by_section: dict[str, np.ndarray], reference: ReferenceData) -> None:
-    for section in reference.sections:
-        mask = reference.metadata['section'].eq(section).to_numpy()
-        local = reference.metadata.loc[mask, 'section_row_index'].to_numpy(dtype=np.int64)
-        observed = np.asarray(ids_by_section[section]).astype(str)[local]
-        expected = reference.metadata.loc[mask, 'spot_id'].astype(str).to_numpy()
-        if not np.array_equal(observed, expected):
-            mismatch = int(np.flatnonzero(observed != expected)[0])
-            raise ValueError(f'{reference.dataset}/{section}: source/reference spot mismatch at sample position {mismatch}: {observed[mismatch]} != {expected[mismatch]}')
+    from data_io.reference_results import validate_section_ids as validate
+    return validate(ids_by_section, reference)
 
 def load_cosie_large_selected_raw(dataset: str, config: dict[str, Any], reference: ReferenceData) -> tuple[np.ndarray, dict[str, Any]]:
     if dataset == 'crc_stereocite':
@@ -246,16 +203,8 @@ def load_csv_joint_labels(clustering_dir: Path, reference: ReferenceData) -> dic
             mask = reference.metadata['section'].eq(section).to_numpy()
             expected_ids = reference.metadata.loc[mask, 'spot_id'].astype(str).to_numpy()
             local = reference.metadata.loc[mask, 'section_row_index'].to_numpy(dtype=np.int64)
-            table = pd.read_csv(find_label_file(cluster_dir, section), low_memory=False)
-            id_column = 'spot_id' if 'spot_id' in table else 'obs_name'
-            ids = table[id_column].astype(str).to_numpy()
-            if local.max(initial=-1) < len(table) and np.array_equal(ids[local], expected_ids):
-                selected = table['cluster'].to_numpy(dtype=np.int32)[local]
-            else:
-                positions = pd.Index(ids).get_indexer(expected_ids)
-                if np.any(positions < 0):
-                    raise KeyError(f'{cluster_dir}/{section}: {np.sum(positions < 0)} spots missing.')
-                selected = table['cluster'].to_numpy(dtype=np.int32)[positions]
+            table = read_assignment_table(find_label_file(cluster_dir, section), low_memory=False)
+            selected = selected_csv_assignments(table, expected_ids, local, missing_context=f'{cluster_dir}/{section}')
             result[mask] = selected
         labels_by_k[k] = result
     return labels_by_k
@@ -267,7 +216,7 @@ def load_human_data(method: str, analysis_root: Path, reference: ReferenceData) 
     counts = {}
     for section in reference.sections:
         path = analysis_root / f'clustering/joint_k{reference.representative_k}/labels_{section}.npy'
-        counts[section] = len(np.load(path, mmap_mode='r'))
+        counts[section] = len(read_assignment_array(path, mmap_mode='r'))
     offsets = dict(zip(reference.sections, np.cumsum([0, *[counts[s] for s in reference.sections[:-1]]])))
     selected = np.empty((len(reference.metadata), full.shape[1]), dtype=np.float32)
     for section in reference.sections:
@@ -289,11 +238,13 @@ def load_human_data(method: str, analysis_root: Path, reference: ReferenceData) 
                 break
             mask = reference.metadata['section'].eq(section).to_numpy()
             local = reference.metadata.loc[mask, 'section_row_index'].to_numpy(dtype=np.int64)
-            result[mask] = np.asarray(np.load(path, mmap_mode='r')[local], dtype=np.int32)
+            result[mask] = np.asarray(read_assignment_array(path, mmap_mode='r')[local], dtype=np.int32)
         if complete:
             labels_by_k[k] = result
     provenance = {'source_embedding': analysis_root / 'cache/joint_standardized.npy', 'source_type': 'saved human embryo joint standardized embedding', 'alignment': 'shared preprocessed feature-row order + result_v6 section_row_index'}
-    return (selected, labels_by_k, provenance, summary)
+    contract = borrowed_input(selected, sections=reference.metadata["section"].to_numpy(),
+        evidence={"kind": "shared_preprocessed_row_order", "selected_rows": reference.metadata["section_row_index"].to_numpy()}, provenance=provenance)
+    return (contract.embedding, labels_by_k, provenance, summary)
 
 def load_method_data(method: str, dataset: str, reference: ReferenceData, analysis_root, output_dir) -> MethodData:
     if not analysis_root.is_dir():
@@ -342,33 +293,10 @@ def generate_outputs(data: MethodData, reference: ReferenceData, args: argparse.
         cached = json.loads((data.output_dir / 'umap_config.json').read_text())
         cached['output_dir'] = str(data.output_dir)
         return cached
+    table_path, biological_path, biology_mask, include_biology = run_method_projection(
+        data, reference, args, source=source, method_name=METHOD_NAMES[data.method],
+        plot_panel=plot_panel_e, custom_biology_colors=custom_biology_colors)
     figures_dir = data.output_dir / 'figures'
-    tables_dir = data.output_dir / 'tables'
-    figures_dir.mkdir(parents=True, exist_ok=True)
-    tables_dir.mkdir(parents=True, exist_ok=True)
-    coordinates = fit_umap(data.embedding, tables_dir / 'integrated_embedding_umap.npy', args.n_neighbors, args.min_dist, args.seed, args.overwrite_umap, source_identity=source)
-    plot_panel_e(data, reference, coordinates, figures_dir, args.seed)
-    point_size = 2.0 if len(coordinates) >= 50000 else 8.0
-    section_values = reference.metadata['section_label'].astype(str).to_numpy()
-    biological_values = reference.metadata[reference.primary_label].to_numpy()
-    biology_mask = meaningful_biology_mask(reference)
-    include_biology = bool(biology_mask.any())
-    plot_individual(figures_dir / 'integrated_by_section.png', coordinates, section_values, f"{METHOD_NAMES[data.method]} — {reference.config['display_name']} integrated UMAP by section", 'section', point_size, args.seed)
-    biological_path = figures_dir / f'integrated_by_{reference.primary_label}.png'
-    if include_biology:
-        plot_individual(biological_path, coordinates, biological_values, f"{METHOD_NAMES[data.method]} — {reference.config['display_name']} integrated UMAP by {reference.primary_label}", 'biology', point_size, args.seed, custom_biology_colors(data, reference))
-    else:
-        biological_path.unlink(missing_ok=True)
-    cluster_dir = figures_dir / 'integrated_joint_clusters'
-    for (k, labels) in sorted(data.joint_labels.items()):
-        plot_individual(cluster_dir / f'integrated_by_joint_k{k}.png', coordinates, labels.astype(str), f"{METHOD_NAMES[data.method]} — {reference.config['display_name']} integrated UMAP by joint k={k}", 'cluster', point_size, args.seed)
-    table = reference.metadata.copy()
-    table['integrated_UMAP1'] = coordinates[:, 0]
-    table['integrated_UMAP2'] = coordinates[:, 1]
-    for (k, labels) in sorted(data.joint_labels.items()):
-        table[f'joint_k{k}'] = labels
-    table_path = tables_dir / 'umap_coordinates_and_labels.csv.gz'
-    table.to_csv(table_path, index=False, compression='gzip')
     config = {'status': 'PASS', 'method': METHOD_NAMES[data.method], 'method_key': data.method, 'dataset': reference.dataset, 'display_name': reference.config['display_name'], 'analysis_root': data.analysis_root, 'output_dir': data.output_dir, 'embedding_source': data.provenance, 'embedding_dim': int(data.embedding.shape[1]), 'standardized_embedding_only': True, 'n_obs_total': int(reference.config['n_obs_total']), 'n_obs_umap': len(reference.metadata), 'sampled': bool(reference.config['sampled']), 'sampling_reference': reference.reference_dir / 'tables/sample_indices_by_section.npz', 'alignment_reference': Path(reference.config['coordinates_table']), 'alignment_key': 'section + spot_id (or shared human embryo preprocessed row order)', 'section_order': reference.sections, 'section_counts_umap': reference.config['section_counts_umap'], 'primary_biological_label': reference.primary_label, 'biological_annotation': {'included_in_figures': include_biology, 'n_annotated': int(biology_mask.sum()), 'n_unavailable': int((~biology_mask).sum()), 'omission_rule': 'omit biological-label figures when no meaningful annotation is available'}, 'joint_cluster_k_values': sorted(data.joint_labels), 'representative_joint_k': reference.representative_k, 'panel_mapping': {'e': 'method standardized-embedding UMAP colored by section, method-specific representative joint cluster, and reference biological label' if include_biology else 'method standardized-embedding UMAP colored by section and method-specific representative joint cluster; biological-label panel omitted because annotation is unavailable'}, 'umap': {'implementation': 'umap-learn', 'version': umap.__version__, 'n_components': 2, 'n_neighbors': args.n_neighbors, 'min_dist': args.min_dist, 'metric': 'euclidean', 'init': 'spectral', 'random_state': args.seed, 'transform_seed': args.seed, 'n_jobs': 1, 'low_memory': True}, 'coordinates_table': table_path, 'figures': {'panel_e': figures_dir / 'panel_e_integrated_embedding_umap.png', 'by_section': figures_dir / 'integrated_by_section.png', 'by_biology': biological_path if include_biology else None}, 'source_analysis_config': data.source_config, 'created_at': datetime.now().astimezone().isoformat(), 'script': Path(__file__).resolve(), 'script_sha256': sha256(Path(__file__).resolve())}
     write_json(data.output_dir / 'umap_config.json', config)
     readme = [f"# {METHOD_NAMES[data.method]} {reference.config['display_name']} UMAP", '', "This directory contains a SpaMosaic-paper-style panel e generated from the method's standardized embedding.", '', f'- Visualization spots and biological labels are aligned to `{reference.reference_dir}`.', "- Joint-cluster colors use this comparison method's own standardized-embedding labels.", f'- Representative joint clustering: k={reference.representative_k}.', f'- Biological-label figures include {int(biology_mask.sum()):,} annotated spots.' if include_biology else '- Biological-label figures are omitted because no meaningful primary annotation is available.', f'- UMAP: n_neighbors={args.n_neighbors}, min_dist={args.min_dist}, metric=euclidean, seed={args.seed}.', '- Raw/input-modality panel c is not duplicated because it is method-independent and already exists in the reference workflow.', '']

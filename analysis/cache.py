@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
-from contextvars import ContextVar
 from pathlib import Path
 
 import numpy as np
@@ -18,24 +16,6 @@ import sklearn
 
 MANIFEST = "analysis_source_manifest.json"
 SCHEMA = "analysis-source-v1"
-_WRITABLE_RESULT_ROOT = ContextVar("writable_result_root", default=None)
-
-
-@contextmanager
-def writable_result_root(root=None):
-    """Explicitly authorize one new experiment's result root for this call.
-
-    The default protection and all input/output overlap checks remain active.
-    No experiment/version name is encoded in analysis internals.
-    """
-    root = None if root is None else Path(root).resolve()
-    if root is not None and not root.name.startswith("result_"):
-        raise ValueError("The writable result root must name a result_* directory.")
-    token = _WRITABLE_RESULT_ROOT.set(root)
-    try:
-        yield
-    finally:
-        _WRITABLE_RESULT_ROOT.reset(token)
 
 
 class CacheMismatch(ValueError):
@@ -147,9 +127,7 @@ def check_output_path(output: Path, input_dirs=()) -> Path:
     output = Path(output).resolve()
     forbidden = {"results", "preprocessed_cache", "gene_imputation",
                  "gene_imputation_spatial_smoothing", "gene_imputation_shared_gene_validation"}
-    allowed = _WRITABLE_RESULT_ROOT.get()
-    result_roots = [p for p in (output, *output.parents) if p.name.startswith("result_")]
-    if any(part in forbidden for part in output.parts) or any(p != allowed for p in result_roots):
+    if any(part in forbidden or part.startswith("result_") for part in output.parts):
         raise CacheMismatch(f"Historical/protected output is read-only: {output}. Choose a new independent output directory.")
     for directory in input_dirs:
         source = Path(directory).resolve()

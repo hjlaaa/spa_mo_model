@@ -18,6 +18,7 @@ from analysis.metrics import external_metrics
 from analysis.clustering import kmeans_labels
 from analysis.cache import check_output_path
 from data_io.hln_annotations import LoadedData
+from data_io.saved_assignments import read_assignment_table
 
 
 A1 = 'Human_Lymph_Node_A1'
@@ -125,7 +126,7 @@ def validate_retained_labels(spec: MethodSpec, a1_barcodes: np.ndarray, predicti
             path = spec.analysis_root / 'clustering' / f'{mode}_k{k}' / f'labels_{A1}.csv'
             if not path.is_file():
                 raise FileNotFoundError(f'{spec.display_name}: missing retained labels {path}')
-            saved = pd.read_csv(path)
+            saved = read_assignment_table(path)
             if not {'obs_name', 'cluster'}.issubset(saved.columns):
                 raise ValueError(f'{path}: missing obs_name/cluster')
             if saved['obs_name'].astype(str).duplicated().any():

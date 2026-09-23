@@ -25,6 +25,7 @@ from analysis.metrics import (spatch_supervised_rows, spatch_requested_internal_
 from analysis.sampling import permutation_sample_indices
 from analysis.batch_metrics import compute_batch_correction_metrics
 from analysis.inputs import load_requested_spatch_metadata, load_requested_spatch_embedding
+from data_io.saved_assignments import read_assignment_array
 from analysis.cache import (array_identity, begin_analysis, cache_hit, check_output_path, file_identity,
     finish_analysis, frame_identity, implementation_identity, run_identity, save_cache)
 
@@ -67,7 +68,7 @@ def fit_or_load(
     manifest = info_path.with_suffix(".source.json")
     files = [cache_path, info_path, centers_path]
     if cache_hit(manifest, identity, files):
-        return np.load(cache_path), json.loads(info_path.read_text())
+        return read_assignment_array(cache_path), json.loads(info_path.read_text())
     labels, info, centers = fit_model(space, k)
     np.save(cache_path, labels)
     np.save(centers_path, centers)

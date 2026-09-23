@@ -3,6 +3,7 @@
 Historical raw-vs-standardized and output-maintenance CLIs are retired.
 """
 from __future__ import annotations
+from analysis.exact_kmeans_workflow import execute_exact_kmeans_scopes
 import matplotlib
 matplotlib.use("Agg")
 from analysis.clustering import fitted_space
@@ -27,6 +28,7 @@ from analysis.protocols import THYMUS
 from analysis.sampling import section_barcode_sample
 from analysis.sampling import section_sample_mask
 from datetime import datetime
+from data_io import saved_assignments as sa
 from pathlib import Path
 from sklearn.metrics import adjusted_rand_score
 from sklearn.metrics import normalized_mutual_info_score
@@ -39,7 +41,8 @@ import numpy as np
 import pandas as pd
 import shutil
 
-from data_io.comparison_inputs import mouse_spleen_MethodData, MOUSE_SPLEEN_SECTIONS, MOUSE_SPLEEN_SECTION_COUNTS, MOUSE_SPLEEN_N_OBS, mousebrain_MethodData, MOUSEBRAIN_SECTIONS, MOUSEBRAIN_GROUP_LABEL_KEY, MOUSEBRAIN_LABEL_KEYS, MOUSEBRAIN_SECTION_COUNTS, simulation_MethodData, SIMULATION_SECTIONS, mouse_thymus_MethodData, MOUSE_THYMUS_SECTIONS, MOUSE_THYMUS_SECTION_COUNTS, MOUSE_THYMUS_N_OBS, misar_seq_MethodData, MISAR_SEQ_SECTIONS, MISAR_SEQ_LABEL_KEYS, MISAR_SEQ_SECTION_COUNTS, human_lymph_node_MethodData, spatch_MethodSpec, spatch_load_metadata, spatch_load_embedding, spatch_validate_metadata
+from data_io.comparison_inputs import mouse_spleen_MethodData, MOUSE_SPLEEN_SECTIONS, MOUSE_SPLEEN_SECTION_COUNTS, MOUSE_SPLEEN_N_OBS, human_lymph_node_MethodData
+from analysis.comparison_readers import mousebrain_MethodData, MOUSEBRAIN_SECTIONS, MOUSEBRAIN_GROUP_LABEL_KEY, MOUSEBRAIN_LABEL_KEYS, MOUSEBRAIN_SECTION_COUNTS, simulation_MethodData, SIMULATION_SECTIONS, mouse_thymus_MethodData, MOUSE_THYMUS_SECTIONS, MOUSE_THYMUS_SECTION_COUNTS, MOUSE_THYMUS_N_OBS, misar_seq_MethodData, MISAR_SEQ_SECTIONS, MISAR_SEQ_LABEL_KEYS, MISAR_SEQ_SECTION_COUNTS
 
 MOUSE_SPLEEN_SEED = SPLEEN['SEED']
 
@@ -150,63 +153,15 @@ def mouse_spleen_plot_spatial(path: Path, coords: np.ndarray, labels: np.ndarray
 
 def mouse_spleen_run_scheme(data: mouse_spleen_MethodData, scheme: str) -> None:
     output = data.output_root / scheme
-    clustering_root = output / 'clustering'
-    metrics_root = output / 'metrics'
-    clustering_root.mkdir(parents=True)
-    metrics_root.mkdir()
-    internal_rows: list[dict[str, Any]] = []
-    spatial_rows: list[dict[str, Any]] = []
-    scaler_arrays: dict[str, np.ndarray] = {}
-    (joint_space, joint_scaler) = fitted_space(data.embedding, scheme)
-    if joint_scaler is not None:
-        scaler_arrays.update(scaler_payload(joint_scaler, 'joint'))
-    section_asw = safe_asw(joint_space, data.sections)
-    all_mask = np.ones(len(data.embedding), dtype=bool)
-    for k in MOUSE_SPLEEN_METRIC_KS:
-        labels_all = kmeans_labels(joint_space, n_clusters=k, random_state=MOUSE_SPLEEN_SEED, n_init=MOUSE_SPLEEN_N_INIT, max_iter=MOUSE_SPLEEN_MAX_ITER)
-        k_directory = clustering_root / f'joint_k{k}'
-        k_directory.mkdir()
-        all_labels_path = k_directory / 'labels_all.csv'
-        mouse_spleen_save_labels(all_labels_path, data, all_mask, labels_all)
-        internal_rows.append({'mode': 'joint', 'scope': 'combined', 'k': k, 'n_obs': len(labels_all), 'embedding_dim': data.embedding.shape[1], **internal_metrics(joint_space, labels_all), 'section_ari': adjusted_rand_score(data.sections, labels_all), 'section_nmi': normalized_mutual_info_score(data.sections, labels_all), 'section_asw': section_asw, 'metric_space': scheme, 'labels_path': str(all_labels_path)})
-        count_rows: list[dict[str, Any]] = []
-        for section in MOUSE_SPLEEN_SECTIONS:
-            mask = data.sections == section
-            labels = labels_all[mask]
-            labels_path = k_directory / f'labels_{section}.csv'
-            mouse_spleen_save_labels(labels_path, data, mask, labels)
-            if k in MOUSE_SPLEEN_PLOT_KS:
-                mouse_spleen_plot_spatial(k_directory / f'spatial_{section}.png', data.coords[mask], labels, f'{data.name} {scheme} joint K={k} {section}')
-            spatial_rows.append({'mode': 'joint', 'k': k, 'section': section, 'n_obs': int(mask.sum()), 'spatial_neighbor_k': MOUSE_SPLEEN_SPATIAL_NEIGHBOR_K, 'neighbor_same_cluster_fraction': hln_spatial_agreement(data.coords[mask], labels), 'labels_path': str(labels_path)})
-            for (cluster, count) in zip(*np.unique(labels, return_counts=True)):
-                count_rows.append({'section': section, 'cluster': int(cluster), 'count': int(count), 'fraction': count / int(mask.sum())})
-        pd.DataFrame(count_rows).to_csv(k_directory / 'cluster_counts.csv', index=False)
-    for k in MOUSE_SPLEEN_METRIC_KS:
-        k_directory = clustering_root / f'independent_k{k}'
-        k_directory.mkdir()
-        count_rows = []
-        for section in MOUSE_SPLEEN_SECTIONS:
-            mask = data.sections == section
-            (section_space, scaler) = fitted_space(data.embedding[mask], scheme)
-            if scaler is not None:
-                scaler_arrays.update(scaler_payload(scaler, section))
-            labels = kmeans_labels(section_space, n_clusters=k, random_state=MOUSE_SPLEEN_SEED, n_init=MOUSE_SPLEEN_N_INIT, max_iter=MOUSE_SPLEEN_MAX_ITER)
-            labels_path = k_directory / f'labels_{section}.csv'
-            mouse_spleen_save_labels(labels_path, data, mask, labels)
-            if k in MOUSE_SPLEEN_PLOT_KS:
-                mouse_spleen_plot_spatial(k_directory / f'spatial_{section}.png', data.coords[mask], labels, f'{data.name} {scheme} independent K={k} {section}')
-            internal_rows.append({'mode': 'independent', 'scope': section, 'k': k, 'n_obs': int(mask.sum()), 'embedding_dim': data.embedding.shape[1], **internal_metrics(section_space, labels), 'section_ari': float('nan'), 'section_nmi': float('nan'), 'section_asw': float('nan'), 'metric_space': scheme, 'labels_path': str(labels_path)})
-            spatial_rows.append({'mode': 'independent', 'k': k, 'section': section, 'n_obs': int(mask.sum()), 'spatial_neighbor_k': MOUSE_SPLEEN_SPATIAL_NEIGHBOR_K, 'neighbor_same_cluster_fraction': hln_spatial_agreement(data.coords[mask], labels), 'labels_path': str(labels_path)})
-            for (cluster, count) in zip(*np.unique(labels, return_counts=True)):
-                count_rows.append({'section': section, 'cluster': int(cluster), 'count': int(count), 'fraction': count / int(mask.sum())})
-        pd.DataFrame(count_rows).to_csv(k_directory / 'cluster_counts.csv', index=False)
-    metrics = pd.DataFrame(internal_rows)
-    spatial = pd.DataFrame(spatial_rows)
-    metrics.to_csv(metrics_root / 'clustering_metrics.csv', index=False)
-    spatial.to_csv(metrics_root / 'spatial_continuity.csv', index=False)
-    spatial.groupby(['mode', 'k'], as_index=False)['neighbor_same_cluster_fraction'].mean().rename(columns={'neighbor_same_cluster_fraction': 'mean_spatial_neighbor_agreement'}).to_csv(metrics_root / 'spatial_continuity_summary.csv', index=False)
-    if scaler_arrays:
-        np.savez_compressed(output / 'scaler_parameters.npz', **scaler_arrays)
+    execute_exact_kmeans_scopes(
+        data, scheme, section_order=MOUSE_SPLEEN_SECTIONS,
+        joint_ks=MOUSE_SPLEEN_METRIC_KS, independent_ks=MOUSE_SPLEEN_METRIC_KS,
+        seed=MOUSE_SPLEEN_SEED, n_init=MOUSE_SPLEEN_N_INIT, max_iter=MOUSE_SPLEEN_MAX_ITER,
+        spatial_neighbor_k=MOUSE_SPLEEN_SPATIAL_NEIGHBOR_K,
+        joint_plot_ks=MOUSE_SPLEEN_PLOT_KS, independent_plot_ks=MOUSE_SPLEEN_PLOT_KS,
+        joint_mask_per_fit=False, save_labels=mouse_spleen_save_labels,
+        plot_spatial=mouse_spleen_plot_spatial, spatial_agreement=hln_spatial_agreement,
+    )
     config = {'dataset': 'Mouse_Spleen', 'method': data.name, 'preprocessing': scheme, 'kmeans_input': 'raw_final_embedding' if scheme == 'raw_embedding' else 'standardized_final_embedding', 'metric_space': 'raw_final_embedding' if scheme == 'raw_embedding' else 'standardized_final_embedding', 'standardization': 'none' if scheme == 'raw_embedding' else 'sklearn.preprocessing.StandardScaler', 'joint_scaler_scope': 'none' if scheme == 'raw_embedding' else 'all_5336_spots', 'independent_scaler_scope': 'none' if scheme == 'raw_embedding' else 'fit_per_section', 'kmeans_type': 'sklearn.cluster.KMeans', 'joint_metric_k_values': MOUSE_SPLEEN_METRIC_KS, 'independent_metric_k_values': MOUSE_SPLEEN_METRIC_KS, 'spatial_metric_k_values': MOUSE_SPLEEN_METRIC_KS, 'plot_k_values': MOUSE_SPLEEN_PLOT_KS, 'plot_point_size': MOUSE_SPLEEN_PLOT_POINT_SIZE, 'plot_dpi': MOUSE_SPLEEN_PLOT_DPI, 'seed': MOUSE_SPLEEN_SEED, 'n_init': MOUSE_SPLEEN_N_INIT, 'max_iter': MOUSE_SPLEEN_MAX_ITER, 'n_obs': len(data.embedding), 'section_counts': MOUSE_SPLEEN_SECTION_COUNTS, 'embedding_dim': data.embedding.shape[1], 'cluster_asw_sample_size': 0, 'cluster_asw_rule': 'full_n_obs_in_each_scope', 'ch_dbi_sample_size': 0, 'ch_dbi_rule': 'full_n_obs_in_each_scope', 'label_asw': 'not_applicable_no_ground_truth_labels', 'spatial_neighbor_k': MOUSE_SPLEEN_SPATIAL_NEIGHBOR_K, 'spatial_graph_scope': 'exact_knn_within_each_section', 'spatial_graph_n_obs': MOUSE_SPLEEN_SECTION_COUNTS, 'joint_and_independent_labels_cover_all_spots': True, 'internal_spatial_and_figures_reuse_saved_labels': True, 'source_data_dir': str(data.data_dir), 'source_files': [{'path': str(path), 'sha256': human_lymph_node_sha256(path)} for path in data.source_paths], 'generation_script': str(MOUSE_SPLEEN_SCRIPT_PATH), 'generation_script_sha256': human_lymph_node_sha256(MOUSE_SPLEEN_SCRIPT_PATH), 'created_at': datetime.now().astimezone().isoformat()}
     (output / 'config.json').write_text(json.dumps(config, indent=2, ensure_ascii=False) + '\n')
     (output / 'SUMMARY.md').write_text(f'# {data.name}: {scheme}\n\n- spots: {MOUSE_SPLEEN_N_OBS}; dimensions: {data.embedding.shape[1]}\n- exact KMeans: seed={MOUSE_SPLEEN_SEED}, n_init={MOUSE_SPLEEN_N_INIT}, max_iter={MOUSE_SPLEEN_MAX_ITER}\n- joint/independent metrics: K={MOUSE_SPLEEN_METRIC_KS}\n- retained clustering directories and full labels: K={MOUSE_SPLEEN_PLOT_KS}\n- spatial figures: K={MOUSE_SPLEEN_PLOT_KS}; point size={MOUSE_SPLEEN_PLOT_POINT_SIZE:g}\n- metrics for K={MOUSE_SPLEEN_PRUNED_CLUSTERING_KS} remain in CSV, but their historical labels_path targets were removed\n- Cluster ASW, CH and DBI: full samples in each scope\n- Label ASW: not applicable because no ground-truth label exists\n- spatial continuity: exact {MOUSE_SPLEEN_SPATIAL_NEIGHBOR_K}-NN per section\n- retained-K metrics and every figure reuse saved full label CSVs\n')
@@ -354,7 +309,7 @@ def mousebrain_add_group_diagnostics(data: mousebrain_MethodData) -> None:
         for k in MOUSEBRAIN_METRIC_KS:
             labels_path = output / 'clustering' / f'joint_k{k}' / 'labels_all.csv'
             if labels_path.exists():
-                saved = pd.read_csv(labels_path)
+                saved = sa.read_assignment_table(labels_path)
                 expected_order = pd.DataFrame({'section': data.sections.astype(str), 'obs_name': data.barcodes.astype(str)})
                 if not saved[['section', 'obs_name']].astype(str).equals(expected_order):
                     raise ValueError(f'{data.name} {scheme} K={k}: labels row mismatch')
@@ -747,9 +702,11 @@ def compare_embeddings(dataset, method_inputs, output_root):
     preprocessing cache, baseline training, or raw-vs-standardized experiment is run.
     """
     from data_io import comparison_inputs as inputs
+    from data_io import paired_comparison_inputs as paired_inputs
+    from analysis import comparison_readers as family_inputs
     from analysis import comparisons, spatch
-    from analysis.cache import (check_output_path, begin_analysis, finish_analysis,
-        data_identity, implementation_identity, file_identity)
+    from analysis.cache import (check_output_path, data_identity, implementation_identity, file_identity)
+    from analysis.evaluation_workflow import evaluation_session
 
     output_root = check_output_path(output_root)
     keys = [item['method'] for item in method_inputs]
@@ -759,25 +716,25 @@ def compare_embeddings(dataset, method_inputs, output_root):
         return compare_spatch_inputs(method_inputs, output_root)
     # Explicit dataset branches; each retains its own reader and scientific runtime.
     if dataset == 'mousebrain':
-        readers = (inputs.mousebrain_load_spa, inputs.mousebrain_load_cosie, inputs.mousebrain_load_mofa, inputs.mousebrain_load_spamosaic)
-        validate, run, shared = inputs.mousebrain_validate, mousebrain_run_scheme, mousebrain_copy_shared
+        readers = (family_inputs.mousebrain_load_spa, family_inputs.mousebrain_load_cosie, family_inputs.mousebrain_load_mofa, family_inputs.mousebrain_load_spamosaic)
+        validate, run, shared = family_inputs.mousebrain_validate, mousebrain_run_scheme, mousebrain_copy_shared
     elif dataset == 'misar_seq':
-        readers = (inputs.misar_seq_load_spa, inputs.misar_seq_load_cosie, inputs.misar_seq_load_mofa, inputs.misar_seq_load_spamosaic)
-        validate, run, shared = inputs.misar_seq_validate, misar_seq_run_scheme, misar_seq_copy_shared
+        readers = (family_inputs.misar_seq_load_spa, family_inputs.misar_seq_load_cosie, family_inputs.misar_seq_load_mofa, family_inputs.misar_seq_load_spamosaic)
+        validate, run, shared = family_inputs.misar_seq_validate, misar_seq_run_scheme, misar_seq_copy_shared
     elif dataset == 'human_lymph_node':
-        readers = (inputs.human_lymph_node_load_spa, inputs.human_lymph_node_load_cosie, inputs.human_lymph_node_load_mofa, inputs.human_lymph_node_load_spamosaic)
+        readers = (paired_inputs.human_lymph_node_load_spa, paired_inputs.human_lymph_node_load_cosie, paired_inputs.human_lymph_node_load_mofa, paired_inputs.human_lymph_node_load_spamosaic)
         validate, run, shared = inputs.human_lymph_node_validate, comparisons.hln_run_scheme, human_lymph_node_copy_shared
     elif dataset == 'mouse_spleen':
-        readers = (inputs.mouse_spleen_load_spa, inputs.mouse_spleen_load_cosie, inputs.mouse_spleen_load_mofa, inputs.mouse_spleen_load_spamosaic)
+        readers = (paired_inputs.mouse_spleen_load_spa, paired_inputs.mouse_spleen_load_cosie, paired_inputs.mouse_spleen_load_mofa, paired_inputs.mouse_spleen_load_spamosaic)
         validate, run, shared = inputs.mouse_spleen_validate, mouse_spleen_run_scheme, mouse_spleen_copy_shared
     elif dataset == 'mouse_thymus':
-        readers = (inputs.mouse_thymus_load_spa, inputs.mouse_thymus_load_cosie, inputs.mouse_thymus_load_mofa, inputs.mouse_thymus_load_spamosaic)
-        validate, run, shared = inputs.mouse_thymus_validate, mouse_thymus_run_scheme, mouse_thymus_prepare_shared
+        readers = (family_inputs.mouse_thymus_load_spa, family_inputs.mouse_thymus_load_cosie, family_inputs.mouse_thymus_load_mofa, family_inputs.mouse_thymus_load_spamosaic)
+        validate, run, shared = family_inputs.mouse_thymus_validate, mouse_thymus_run_scheme, mouse_thymus_prepare_shared
     elif dataset == 'simulation':
-        readers = (inputs.simulation_load_spa, inputs.simulation_load_cosie, inputs.simulation_load_mofa, inputs.simulation_load_spamosaic)
-        validate, run, shared = inputs.simulation_validate_method, simulation_run_scheme, simulation_copy_shared_metrics
+        readers = (family_inputs.simulation_load_spa, family_inputs.simulation_load_cosie, family_inputs.simulation_load_mofa, family_inputs.simulation_load_spamosaic)
+        validate, run, shared = family_inputs.simulation_validate_method, simulation_run_scheme, simulation_copy_shared_metrics
     elif dataset == 'crc_stereocite':
-        readers = (inputs.crc_stereocite_load_spa, inputs.crc_stereocite_load_cosie, inputs.crc_stereocite_load_mofa, inputs.crc_stereocite_load_spamosaic)
+        readers = (paired_inputs.crc_stereocite_load_spa, paired_inputs.crc_stereocite_load_cosie, paired_inputs.crc_stereocite_load_mofa, paired_inputs.crc_stereocite_load_spamosaic)
         validate, run, shared = inputs.crc_stereocite_validate, comparisons.crc_run_scheme, comparisons.crc_prepare_shared
     else:
         raise ValueError(f'Unsupported comparison dataset: {dataset}')
@@ -801,32 +758,32 @@ def compare_embeddings(dataset, method_inputs, output_root):
         'protocol': comparison_protocol_identity(dataset),
         'implementation': implementation_identity('standardized-method-comparison-v1')}
     source_dirs = [data.data_dir for data in methods] + [path for data in methods for path in data.source_paths]
-    if begin_analysis(output_root, identity, input_dirs=source_dirs):
-        return json.loads((output_root / 'comparison_summary.json').read_text())
-    if dataset == 'mouse_thymus': sample = mouse_thymus_build_asw_sample(methods)
-    if dataset == 'crc_stereocite':
-        inputs.crc_stereocite_validate_cross_method_alignment(methods)
-        sample = comparisons.crc_select_by_barcode_hash(methods[0], comparisons.CRC_ASW_SECTION_COUNTS, 'asw_seed0|')
-        plot_sample = comparisons.crc_select_by_barcode_hash(methods[0], comparisons.CRC_PLOT_SECTION_COUNTS, '')
-    for data in methods:
+    with evaluation_session(output_root, identity, input_dirs=source_dirs) as reused:
+        if reused:
+            return json.loads((output_root / 'comparison_summary.json').read_text())
+        if dataset == 'mouse_thymus': sample = mouse_thymus_build_asw_sample(methods)
         if dataset == 'crc_stereocite':
-            graphs = shared(data, sample, plot_sample)
-            run(data, 'standardized_embedding', sample, plot_sample, graphs)
-        elif dataset == 'mouse_thymus':
-            shared(data, sample)
-            run(data, 'standardized_embedding', sample)
-        else:
-            run(data, 'standardized_embedding')
-            shared(data)
-            if dataset == 'mousebrain': mousebrain_add_group_diagnostics(data)
-        retain_comparison_artifacts(data, dataset)
-    result = collect_method_tables(dataset, keys, [data.output_root for data in methods], output_root)
-    finish_analysis(output_root, identity)
-    return result
+            inputs.crc_stereocite_validate_cross_method_alignment(methods)
+            sample = comparisons.crc_select_by_barcode_hash(methods[0], comparisons.CRC_ASW_SECTION_COUNTS, 'asw_seed0|')
+            plot_sample = comparisons.crc_select_by_barcode_hash(methods[0], comparisons.CRC_PLOT_SECTION_COUNTS, '')
+        for data in methods:
+            if dataset == 'crc_stereocite':
+                graphs = shared(data, sample, plot_sample)
+                run(data, 'standardized_embedding', sample, plot_sample, graphs)
+            elif dataset == 'mouse_thymus':
+                shared(data, sample)
+                run(data, 'standardized_embedding', sample)
+            else:
+                run(data, 'standardized_embedding')
+                shared(data)
+                if dataset == 'mousebrain': mousebrain_add_group_diagnostics(data)
+            retain_comparison_artifacts(data, dataset)
+        result = collect_method_tables(dataset, keys, [data.output_root for data in methods], output_root)
+        return result
 
 
 def compare_spatch_inputs(method_inputs, output_root):
-    from data_io.comparison_inputs import spatch_MethodSpec, spatch_load_metadata, spatch_load_embedding, spatch_validate_metadata
+    from analysis.spatch_readers import spatch_MethodSpec, spatch_load_metadata, spatch_load_embedding, spatch_validate_metadata
     from analysis import spatch
     from analysis.cache import begin_analysis, finish_analysis, check_output_path
     specs, metadata, sources = [], [], []

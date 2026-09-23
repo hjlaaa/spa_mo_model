@@ -9,8 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts import run_crc_stereocite as crc
-from scripts import run_human_lymph_node as shared
+from scripts import paired_cli as crc
+from scripts.paired_entry import run_paired_entry
+from training.entry_defaults import paired_rna_protein_defaults as _entry_defaults
+from data_io.paired_preparation import PairSpec, prepare_paired_dataset
 from data_io.paired import (
     read_spleen_pair, prepare_rna_gene_ids, filter_globally_nonzero_genes,
 )
@@ -27,7 +29,7 @@ SAMPLES = {"Mouse_Spleen1": "Mouse_Spleen1", "Mouse_Spleen2": "Mouse_Spleen2"}
 
 def get_dataset_defaults():
     """Spleen uses the paired RNA/ADT settings with its own paths and identity."""
-    return shared.get_dataset_defaults(data_dir=DATA_DIR, output_dir=OUTPUT_DIR)
+    return _entry_defaults(data_dir=DATA_DIR, output_dir=OUTPUT_DIR)
 
 
 def parse_args(argv=None):
@@ -40,12 +42,12 @@ def parse_args(argv=None):
 def main(argv=None) -> None:
     args = parse_args(argv)
     run_config = crc.resolve_run_config(args, samples=SAMPLES, dataset_name="Mouse Spleen")
-    crc.run_crc_pipeline(
-        args, samples=SAMPLES, read_pair=read_spleen_pair,
-        prepare_rna=prepare_rna_gene_ids,
-        filter_shared_genes=filter_globally_nonzero_genes,
+    run_paired_entry(
+        args,
         status_prefix="MOUSE_SPLEEN",
         run_config=run_config,
+        prepare_dataset=prepare_paired_dataset,
+        pair_spec=PairSpec(SAMPLES, read_spleen_pair, prepare_rna_gene_ids, filter_globally_nonzero_genes),
     )
 
 

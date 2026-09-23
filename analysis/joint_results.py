@@ -5,6 +5,7 @@ and filtering use the P6 metric authority; pooled values only check alignment.
 """
 from __future__ import annotations
 
+from data_io import saved_assignments as sa
 import re
 from pathlib import Path
 from typing import Any
@@ -102,9 +103,9 @@ def validate_joint_concatenation(
     labels_all_path = directory / "labels_all.csv"
     cache_path = analysis / f"_fit_cache/joint_combined_k{k}.npy"
     if labels_all_path.is_file():
-        reference = pd.read_csv(labels_all_path, usecols=["cluster"])["cluster"].to_numpy()
+        reference = sa.read_assignment_table(labels_all_path, usecols=["cluster"])["cluster"].to_numpy()
     elif cache_path.is_file():
-        reference = np.asarray(np.load(cache_path))
+        reference = np.asarray(sa.read_assignment_array(cache_path))
     else:
         raise FileNotFoundError(
             f"No combined joint-label reference for {directory}"
@@ -129,7 +130,7 @@ def calculate_inline_dataset(
         }
         for label_path in section_label_files(directory):
             needed = ["section", "cluster", *labels]
-            frame = pd.read_csv(label_path, usecols=needed, low_memory=False)
+            frame = sa.read_assignment_table(label_path, usecols=needed, low_memory=False)
             section_values = frame["section"].astype(str).unique()
             if len(section_values) != 1:
                 raise ValueError(f"{label_path}: expected one section")
@@ -195,7 +196,7 @@ def calculate_spatch(config: dict[str, Any]) -> list[dict[str, Any]]:
             section = label_path.stem.removeprefix("labels_")
             if section not in metadata_by_section:
                 raise ValueError(f"{label_path}: section absent from SPATCH metadata")
-            frame = pd.read_csv(
+            frame = sa.read_assignment_table(
                 label_path,
                 usecols=["spot_id", "cluster"],
                 dtype={"spot_id": str},

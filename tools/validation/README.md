@@ -26,7 +26,7 @@ python -m tools.validation.check_spatch_cache --help
 python -m tools.validation.check_fixed_gpu --help
 ```
 
-C1 的 reference 包含冻结 `old_behavior.json`、`old_cases/` 和从旧 suite 固定命令保存的 `spatch_command.json`。命令是测试输入，不是第二份 dataset defaults；当前 batch/parser 和实际只读 cache loader 消费它。输出须选全新的独立目录：
+C1 的 reference 包含冻结 `old_behavior.json`、`old_cases/` 和从旧 suite 固定命令保存的 `spatch_command.json`。命令是测试输入，不是第二份 dataset defaults；当前 batch CLI 检查与实际只读 cache loader 消费它；loader 参数由显式小 fixture 提供并与冻结命令核对。输出须选全新的独立目录：
 
 ```bash
 python -m tools.validation.check_spatch_cache --reference-dir refactor_checks/s2c_validation_20260917/c1_reference --output-dir refactor_checks/new_cache_check
@@ -48,3 +48,13 @@ python -m tools.validation.check_gpu_report --profile spatch_bf16 --process-exit
 **既存 F-tests 问题**：`smoke_stage_model` 的 `invalid_single_modality` 文案断言仍期待 `at least two`，与当前 `single-modality mode is disabled` 不匹配。移动前后均在同一位置 FAIL，不报告为已修复；单模态专项通过。
 
 当前批次自动回归及小 fixture/expected 继续在 refactor_checks，未创建 tests 或重写测试框架。S2c 的完整工具前后事件/数值/RNG对照、依赖审计与限制见 [REPORT](../../refactor_checks/s2c_validation_20260917/REPORT.md)。
+
+## U7c 依赖边界
+
+数值 replay 直接调用 `training.fit` 的 fit、forward、initial/refresh prior；不再借用 CRC/MouseBrain runner 导出的业务函数。SPATCH schema/identity checker 直接使用 `data_io.spatch_preparation` 的常量、参数合同和 strict loader，raw 禁入哨兵直接覆盖 `data_io.spatch_raw`。
+
+`check_spatch_cache` 的两处 CLI 引用是**被测入口**：`main_case` 对当前 `run_spatch.main` 加 Stage/GPU 哨兵，`check_command` 调用当前 batch 的公开 `main(... --dry-run)` 并检查打印命令。它们不调用 runner parser/build_tasks 来取得业务参数；loader 使用小 fixture 的显式参数，并断言冻结命令的 n_comps/hvg/Harmony 与之相符。没有启动旧 suite、GPU 或训练。`replay_model.static_refresh_audit` 对当前 MouseBrain runner 只读 AST，验证它仍把任务交给公共 task；这不是运行时业务依赖。
+
+仓库没有独立 `tests/`。历史 `refactor_checks` 的 oracle、fixture、expected 和旧 import 属于冻结证据，不批量改写；需要重放时使用其冻结环境/源码。本批接口回归放在新的 [U7c 目录](../../refactor_checks/u7c_validation_dependencies_20260922/REPORT.md)。历史 probe 使用的 `replay_model.crc/mouse` 模块别名不再是当前工具接口，当前使用 `replay_model.fit_runtime`；生产 runner 原公开兼容 API 未删除。
+
+继续从仓库根目录以 `python -m tools.validation...` 运行；外部 cwd 可显式设置仓库根 `PYTHONPATH`。validation 源码不插入 scripts 路径，不引入安装/package 布局变化。`EXPECTED_HEAD` 的旧值仅是未使用的历史常量，不代表当前工作树、验收起点或运行限制。完整 GPU replay、已知 smoke 文案失败均不在本批重跑或修正范围。

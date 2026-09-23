@@ -1,10 +1,10 @@
 # 可执行入口
 
-从仓库根目录使用项目已有 Python 环境。当前共 **18 个 Python CLI**：根目录14个稳定入口，`comparison/` 两个跨方法入口，`workflows/` 两个独立工作流。开发检查位于 [tools/validation](../tools/validation/README.md)。
+从仓库根目录使用项目已有 Python 环境。下列 /path/to 路径均为待替换模板，输出必须选择新的不存在目录；所有示例未使用overwrite。当前共 **18 个 Python CLI**：根目录14个稳定入口，`comparison/` 两个跨方法入口，`workflows/` 两个独立工作流。开发检查位于 [tools/validation](../tools/validation/README.md)。
 
 ## Training / batch
 
-九数据集参数与默认值由各自 runner 负责，batch 每个数据集启动独立进程。具体命令见[根 README](../README.md)。
+九数据集默认值由 `training/entry_defaults.py` 提供，模型配置由 `training/config.py` 解析；各 CLI 保留原参数映射。batch 每个数据集启动独立进程。具体命令见[根 README](../README.md)。
 
 | Dataset ID | Canonical runner |
 |---|---|
@@ -18,15 +18,13 @@
 | mouse_thymus | [run_mouse_thymus.py](run_mouse_thymus.py) |
 | simulation | [run_simulation.py](run_simulation.py) |
 
-- [run_experiments.py](run_experiments.py)：显式 dataset 列表、output root、preset/override。
+- [run_experiments.py](run_experiments.py)：显式 dataset 列表、output root、原样传递的 `--runner-args` 与共享 override；不调用历史 suite。
 - [train_stage_model.py](train_stage_model.py)：generic bundle / preprocess_config / synthetic / 合法 noOT / weights export。
 - [run_preprocessing.py](run_preprocessing.py)：现有数据预处理 CLI，算法位于 `data_io/`。
 
 ## Evaluation
 
 [evaluate.py](evaluate.py) 是单 run 的正式分析入口，显式指定 dataset、run_dir、output_dir、protocol 和 scope。不同数据集的科研协议保持独立。
-
-Human Lymph Node 也支持历史 requested 协议（K=8/10/12、joint/independent、无生物学监督标签）。新实验若把独立分析目录放在 `result_*` 根目录中，需要显式指定 `--writable-result-root`；默认保持历史结果写保护。
 
 ```bash
 python scripts/evaluate.py --help
@@ -43,12 +41,12 @@ python scripts/analyze_simulation.py --run-dir /path/to/simulation_run --data-di
 
 ## Cross-method comparison
 
-从仓库根目录用 `python -m` 执行嵌套 CLI，无额外 sys.path 设置。
+从仓库根目录用 `python -m` 执行嵌套 CLI，无需将 scripts 子目录加入 sys.path；外部工作目录须显式提供仓库根 PYTHONPATH。
 
 | CLI | 用途 | 实现 |
 |---|---|---|
-| [comparison/compare_embeddings.py](comparison/compare_embeddings.py) | 对显式给出的多个方法执行保留的 standardized clustering 协议，输出各方法结果及合并表 | `analysis/method_comparison.py`、`data_io/comparison_inputs.py` 与 P6 权威函数 |
-| [comparison/plot_method_umaps.py](comparison/plot_method_umaps.py) | D8b：对齐同一 reference cohort，绘制各方法 embedding / 已有 joint labels 的 UMAP | `analysis/method_umap.py`、`analysis/umap.py` |
+| [comparison/compare_embeddings.py](comparison/compare_embeddings.py) | 对显式给出的多个方法执行保留的 standardized clustering 协议，输出各方法结果及合并表 | `analysis/method_comparison.py`、公共 evaluation/exact workflow 与中立 input readers |
+| [comparison/plot_method_umaps.py](comparison/plot_method_umaps.py) | 对齐同一 reference cohort，绘制各方法 embedding / 已有 joint labels 的 UMAP | `analysis/method_umap.py`、公共 `analysis/umap_workflow.py` 与 `analysis/umap.py` |
 
 ```bash
 python -m scripts.comparison.compare_embeddings --help
@@ -57,7 +55,7 @@ python -m scripts.comparison.plot_method_umaps --help
 python -m scripts.comparison.plot_method_umaps --inputs /path/to/umap_inputs.json --output-dir /path/to/new_method_umaps
 ```
 
-`compare_embeddings` 支持 `mousebrain / misar_seq / human_lymph_node / mouse_spleen / mouse_thymus / simulation / crc_stereocite / spatch`。Human Embryo 的专属单-run协议仍用 evaluate；其 cross-method UMAP 受下述 D8b 支持。
+`compare_embeddings` 支持 `mousebrain / misar_seq / human_lymph_node / mouse_spleen / mouse_thymus / simulation / crc_stereocite / spatch`。Human Embryo 的专属单-run协议仍用 evaluate；其 cross-method UMAP 受下述method UMAP支持。
 
 `methods.json` 是有序且 method 不重复的列表，例如：
 
@@ -89,13 +87,13 @@ SPATCH 只保留 spa/COSIE full-spot 方法，各 entry 的 `paths` 为：run_di
 ]
 ```
 
-D8b 支持 COSIE / MOFA+ / SpaMosaic 的九数据集及 Harmony 的 Human Embryo（method keys：cosie/mofa/spamosaic/harmony）。reference_dir 包含已生成的 UMAP config、sample indices、coordinates/labels；可使用下述 input-integration 输出的 `umap/`。各方法采用原格式读取和已有 joint labels。默认 UMAP n_neighbors=30、min_dist=.3、seed=42，不改变既有输入空间、采样和 panel。缺失方法输入记录 UNAVAILABLE。
+method UMAP支持 COSIE / MOFA+ / SpaMosaic 的九数据集及 Harmony 的 Human Embryo（method keys：cosie/mofa/spamosaic/harmony）。reference_dir 包含已生成的 UMAP config、sample indices、coordinates/labels；可使用下述 input-integration 输出的 `umap/`。各方法采用原格式读取和已有 joint labels。默认 UMAP n_neighbors=30、min_dist=.3、seed=42，不改变既有输入空间、采样和 panel。缺失方法输入记录 UNAVAILABLE。
 
 ## Additional workflows
 
 | CLI | 用途 |
 |---|---|
-| [workflows/plot_input_integration.py](workflows/plot_input_integration.py) | D8c：九数据集输入模态 panel c 与已完成整合 embedding panel e 的 SpaMosaic 风格展示 |
+| [workflows/plot_input_integration.py](workflows/plot_input_integration.py) | 九数据集输入模态 panel c 与已完成整合 embedding panel e 的 SpaMosaic 风格展示 |
 | [workflows/evaluate_hln_annotations.py](workflows/evaluate_hln_annotations.py) | HLN A1 外部人工标签与五方法比较，D1不评分 |
 
 ```bash
@@ -105,7 +103,7 @@ python -m scripts.workflows.evaluate_hln_annotations --help
 python -m scripts.workflows.evaluate_hln_annotations --inputs /path/to/annotation_inputs.json --output-dir /path/to/new_annotation_metrics --dry-run
 ```
 
-D8c **不运行 SpaMosaic 模型、不训练 integration**。它读取已有整合 embedding；原模态视图按原流程可能执行数据读取、PCA/Harmony 等输入准备。SPATCH 的 visualization sample feature cache 只写新的 output/input_modalities，独立于只读 model-ready `preprocessed_cache/spatch`。默认 max_samples=100000、UMAP参数同上。其 dataset key 与 compare/evaluate一致（MISAR为misar_seq，CRC为crc_stereocite）。
+该workflow **不运行 SpaMosaic 模型、不训练 integration**。它读取已有整合 embedding；原模态视图按原流程可能执行数据读取、PCA/Harmony 等输入准备。SPATCH 的 visualization sample feature cache 只写新的 output/input_modalities，独立于只读 model-ready `preprocessed_cache/spatch`。默认 max_samples=100000、UMAP参数同上。其 dataset key 与 compare/evaluate一致（MISAR为misar_seq，CRC为crc_stereocite）。
 
 人工标注 JSON 示例：
 
@@ -121,8 +119,6 @@ method 支持 spa / cosie / present / mofa / spamosaic。spa 的 paths 如上；
 
 ## Layout and protection
 
-本次 v15C-2 的后台队列、固定配置与状态管理独立位于 [experiments/v15c2](../experiments/v15c2/README.md)，不放入这里的长期 CLI 或核心模块。六数据集训练入口通过共享参数支持可选 `--feature_graph`，默认关闭。
-
 ```text
 scripts/
   run_*.py / train_stage_model.py  九dataset、batch、preprocessing、generic
@@ -136,4 +132,22 @@ scripts/
     evaluate_hln_annotations.py
 ```
 
-所有输入与新输出明确分离；历史 result/cache 只读。旧 raw-vs-standardized main、版本化 UMAP / supplementary CLI 已退休，不保留转发 shim。历史证据与源码快照保留原位置。当前工具见 [tools/validation](../tools/validation/README.md)，完整迁移和验证见 [S2d REPORT](../refactor_checks/s2d_scripts_final_20260917/REPORT.md)。
+所有输入与新输出明确分离；历史 result/cache 只读。旧 raw-vs-standardized main、版本化 UMAP / supplementary CLI 已退休，不保留转发 shim。历史证据与源码快照保留原位置。当前工具见 [tools/validation](../tools/validation/README.md)，当前边界见[架构说明](../docs/CURRENT_ARCHITECTURE.md)，过程证据见[U系列计划](../docs/refactoring/CORE_INTERFACE_REFACTOR_PLAN.md)。
+
+
+## CLI 与兼容边界
+
+正式可执行入口仍为上列18个，不需要选择历史版本脚本。`--model-version v7A`等参数只是现有模型来源标签；带版本的历史结果目录不代表另一套CLI。
+
+- **A 正式入口**：九数据集训练CLI、generic、batch、evaluate、standalone preprocessing，共13个。
+- **D 专项入口**：Simulation diagnostics、两项comparison、两项workflows，共5个。保留其科研职责；`--dry-run`的含义以各自help为准，不能统一理解为“不计算”。
+- **B 兼容API**：CRC/MISAR旧`parse_args`、配置投影及`run_*_pipeline`导入名保留。parser/投影从`paired_cli.py`、`multisection_cli.py`导出；pipeline只委托共享entry shell。它们不是另一套可执行launcher。
+- **C 已退休历史CLI**：旧`run_result_v*_suite`、daemon、旧raw-vs-standardized比选、版本化UMAP/supplementary launcher与baseline录制工具继续退休。只保留历史报告/快照，不新增转发脚本、不删除冻结证据；退休明细见[U7b入口清单](../refactor_checks/u7b_cli_wrappers_20260922/REPORT.md)。
+
+`paired_cli.py`和`multisection_cli.py`仅提供共享parser及已存在的配置投影；`paired_entry.py`和`multisection_entry.py`提供输入准备/资源所有权接缝，均无`__main__`，不是用户CLI。原始读取/预处理在data_io，Stage/prior/fit/export在公共training task，epoch循环在training.fit。正式runner之间不再互相导入parser、默认表或训练业务实现。
+
+batch仍接受`crc`/`misar`；evaluate/comparison仍接受`crc_stereocite`/`misar_seq`。这是现有各入口的显式ID，不在本批新增别名或统一改名。batch的共享override追加在`--runner-args`之后，output-root与模式控制保持原行为；`--dry-run`只打印命令，不创建输出或启动子训练。
+
+SPATCH `--input_mode reuse`为默认，仍是严格schema-1 model-ready cache；`raw`仍从六个已对齐H5AD（两section的RNA、Protein、已有HE/UNI）开始，不提供原图重新提取UNI。raw默认写本次output_dir/preparation_cache，--output_cache_dir只接受全新目录；overwrite不覆盖cache，invalid reuse不fallback raw。完整合同见[当前架构](../docs/CURRENT_ARCHITECTURE.md)。validation继续位于tools/validation；有些工具没有argparse，不能用`--help`假设会阻止其执行计算。未调整安装方式、包布局或运行目录规则。
+
+当前checker直接依赖公共data_io/training/model接口。仅在测试正式CLI行为时调用其main；冻结refactor_checks旧导入保持历史原样，不能当作当前推荐API。兼容API状态与验证限制见[U7c报告](../refactor_checks/u7c_validation_dependencies_20260922/REPORT.md)。

@@ -1,5 +1,6 @@
 """Explicit single-run evaluation, using the accepted loaders and protocols."""
 from __future__ import annotations
+from data_io import saved_assignments as sa
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ import pandas as pd
 from analysis import loaders, protocols
 from analysis.cache import (begin_analysis, finish_analysis, check_output_path, data_identity,
                             file_identity, implementation_identity)
-from analysis.metrics import compute_joint_per_section_supervised_metrics
+from analysis.evaluation_workflow import evaluation_session, evaluate_saved_joint
 from analysis.plotting import plot_dataset_spatial
 from analysis.requested import analyze_prepared, truth_arrays
 
@@ -88,24 +89,10 @@ def evaluate_joint_per_section(data, dataset, assignments_dir, output_dir, k_val
     protocol = protocols.joint_per_section_protocol(DISPLAY_NAMES[dataset], k_values, sections)
     loaded = {k: loaders.load_joint_assignments(assignments_dir, k, data.sections, data.barcodes)
               for k in k_values} if protocol["status"] == "applicable" else {}
-    source = {"data": data_identity(data, truth), "protocol_name": protocol_name, "protocol": protocol,
-              "assignments": {str(k): [file_identity(p) for p in files] for k, (_, files) in loaded.items()},
-              "implementation": implementation_identity("joint-per-section-export-v1")}
-    if begin_analysis(output_dir, source, input_dirs=[run_dir, *([assignments_dir] if loaded else [])]):
-        return json.loads((output_dir / "summary.json").read_text())
-    rows = []
-    for k, (labels, files) in loaded.items():
-        rows.extend(compute_joint_per_section_supervised_metrics(DISPLAY_NAMES[dataset], labels,
-            data.sections, truth, k=k, section_order=sections,
-            joint_label_source=";".join(str(p) for p in files),
-            truth_source=str(output_dir / "analysis_source_manifest.json") + "#identity.data.truth")["rows"])
-    if rows:
-        pd.DataFrame(rows).to_csv(output_dir / "joint_per_section_supervised_metrics.csv", index=False)
-    record = {"dataset": dataset, "protocol": protocol_name, "scope": "joint_per_section",
-              "status": protocol["status"], "rows": len(rows), "aggregation": "none"}
-    (output_dir / "summary.json").write_text(json.dumps(record, indent=2) + "\n")
-    finish_analysis(output_dir, source)
-    return record
+    return evaluate_saved_joint(data, dataset=dataset, display_name=DISPLAY_NAMES[dataset],
+        truth=truth, sections=sections, protocol=protocol, loaded=loaded,
+        assignments_dir=assignments_dir, output_dir=output_dir, run_dir=run_dir,
+        protocol_name=protocol_name)
 
 
 def render_requested(data, dataset, analysis_dir, output_dir, *, k_values, modes, run_dir):
@@ -116,7 +103,7 @@ def render_requested(data, dataset, analysis_dir, output_dir, *, k_values, modes
             for section in np.unique(data.sections):
                 mask = np.asarray(data.sections) == section
                 path = analysis_dir / "clustering" / f"{mode}_k{k}" / f"labels_{section}.csv"
-                frame = pd.read_csv(path, dtype={"obs_name": str})
+                frame = sa.read_assignment_table(path, dtype={"obs_name": str})
                 if len(frame) != int(mask.sum()) or not np.array_equal(frame["obs_name"].to_numpy(), np.asarray(data.barcodes)[mask]):
                     raise ValueError(f"Plot label/spot order mismatch: {path}")
                 items.append((mode, k, section, mask, frame["cluster"].to_numpy(dtype=int), path))
@@ -149,7 +136,7 @@ def evaluate(args):
     if per_section and args.preprocessing != "standardized_embedding":
         raise ValueError("The reference joint_per_section protocol uses joint standardized labels")
     if args.no_plots and not (args.protocol == "requested" and args.dataset in protocols.SPECS):
-        raise ValueError("--no-plots is supported by generic requested workflows only")
+        raise ValueError("--no-plots is supported by the five generic requested workflows only")
     if args.plot_k is not None and not (args.protocol == "embryo-reference" or
             (args.protocol == "requested" and args.dataset in protocols.SPECS) or
             (args.protocol == "comparison" and args.dataset == "spatch")):
@@ -212,7 +199,7 @@ def evaluate(args):
                                          run_dir=run_dir, protocol_name=args.protocol)
     if args.protocol == "requested":
         if args.dataset not in protocols.SPECS:
-            raise ValueError("Use comparison for CRC, or embryo-reference for Human Embryo; protocols are not interchangeable")
+            raise ValueError("Use comparison for CRC/HLN, or embryo-reference for Human Embryo; protocols are not interchangeable")
         spec = protocols.SPECS[args.dataset]
         spec = replace(spec,
             joint_ks=tuple(args.k or spec.joint_ks) if "joint" in modes else (),
@@ -253,14 +240,14 @@ def evaluate_comparison(data, args, run_dir, output, modes, per_section):
                   "protocol": {"name": "CRC comparison", "settings": protocols.CRC, "scheme": scheme,
                                "k": k, "modes": list(modes)},
                   "implementation": implementation_identity("crc-comparison-workflow-v1")}
-        if begin_analysis(output, source, input_dirs=[run_dir]):
-            return {"dataset": dataset, "analysis": str(output / scheme)}
-        asw = comparisons.crc_select_by_barcode_hash(data, comparisons.CRC_ASW_SECTION_COUNTS, "asw_seed0")
-        plots = comparisons.crc_select_by_barcode_hash(data, comparisons.CRC_PLOT_SECTION_COUNTS, "plot_seed0")
-        graphs = comparisons.crc_prepare_shared(data, asw, plots)
-        comparisons.crc_run_scheme(data, scheme, asw, plots, graphs,
-            joint_ks=k if "joint" in modes else [], independent_ks=k if "independent" in modes else [])
-        finish_analysis(output, source)
+        with evaluation_session(output, source, input_dirs=[run_dir]) as reused:
+            if reused:
+                return {"dataset": dataset, "analysis": str(output / scheme)}
+            asw = comparisons.crc_select_by_barcode_hash(data, comparisons.CRC_ASW_SECTION_COUNTS, "asw_seed0")
+            plots = comparisons.crc_select_by_barcode_hash(data, comparisons.CRC_PLOT_SECTION_COUNTS, "plot_seed0")
+            graphs = comparisons.crc_prepare_shared(data, asw, plots)
+            comparisons.crc_run_scheme(data, scheme, asw, plots, graphs,
+                joint_ks=k if "joint" in modes else [], independent_ks=k if "independent" in modes else [])
     elif dataset == "human_lymph_node":
         joint_k = comparisons.HLN_METRIC_KS if args.k is None else args.k
         independent_k = comparisons.HLN_PLOT_KS if args.k is None else args.k
@@ -268,11 +255,11 @@ def evaluate_comparison(data, args, run_dir, output, modes, per_section):
                   "protocol": {"name": "HLN comparison", "settings": protocols.HLN, "scheme": scheme,
                                "joint_k": joint_k, "independent_k": independent_k, "modes": list(modes)},
                   "implementation": implementation_identity("hln-comparison-workflow-v1")}
-        if begin_analysis(output, source, input_dirs=[run_dir]):
-            return {"dataset": dataset, "analysis": str(output / scheme)}
-        comparisons.hln_run_scheme(data, scheme, joint_ks=joint_k if "joint" in modes else [],
-                                   independent_ks=independent_k if "independent" in modes else [])
-        finish_analysis(output, source)
+        with evaluation_session(output, source, input_dirs=[run_dir]) as reused:
+            if reused:
+                return {"dataset": dataset, "analysis": str(output / scheme)}
+            comparisons.hln_run_scheme(data, scheme, joint_ks=joint_k if "joint" in modes else [],
+                                       independent_ks=independent_k if "independent" in modes else [])
     elif dataset == "spatch":
         if args.batch_metrics_source is None:
             raise ValueError("SPATCH comparison retains historical batch values; supply --batch-metrics-source explicitly")
@@ -301,3 +288,4 @@ def evaluate_comparison(data, args, run_dir, output, modes, per_section):
         raise ValueError("This entry supports requested for this dataset; its cross-method comparison CLI remains documented")
     return {"dataset": dataset, "protocol": "comparison", "analysis": str(output / scheme),
             "joint_per_section": "not_applicable" if dataset != "spatch" and per_section else None}
+

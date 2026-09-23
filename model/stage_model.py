@@ -28,7 +28,6 @@ from .sparse_uot import (
     update_bidirectional_candidate_sparse_uot_prior_from_embeddings,
 )
 from .spatial_graph import compute_spatial_knn_graph_with_weights
-from .feature_graph import FeatureGraphCache
 from .tensor_utils import tensor_to_numpy
 
 
@@ -298,10 +297,6 @@ class StageMultiModalModel(nn.Module):
         self.ot_prior: dict[tuple[str, str], dict[str, Any]] | None = None
         self._spatial_graph_cache: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor]] = {}
         self._spatial_graph_cache_inputs: dict[tuple[Any, ...], np.ndarray] = {}
-        self.feature_graph = FeatureGraphCache(
-            enabled=self.config["feature_graph"]["enabled"],
-            k_spatial=int(self.config["graph"]["knn_neighbors_spatial"]),
-        )
 
         self.fusion_modules = nn.ModuleDict()
         for modality_order in self.valid_modality_sets:
@@ -1110,10 +1105,6 @@ class StageMultiModalModel(nn.Module):
             )
             if keep_full_outputs:
                 fused_embeddings[section] = fused
-
-            edge_index, edge_weight = self.feature_graph.combine(
-                section, fused, edge_index, edge_weight,
-            )
 
             if graph_sage_cfg["enabled"]:
                 if use_graph_encoder_checkpoint:

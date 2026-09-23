@@ -37,8 +37,7 @@ import faiss
 from model.stage_model import StageMultiModalModel, should_update_ot
 from model import sparse_uot
 from model.loss import compute_joint, crossview_contrastive_Loss
-from scripts import run_mousebrain as mouse
-from scripts import run_crc_stereocite as crc
+from training import fit as fit_runtime
 
 GIT = "/home/hujinlan/miniconda3/envs/cosie/bin/git"
 EXPECTED_HEAD = "922d1738922e8b94890a54f5e42bbf6551f5ccc0"
@@ -200,16 +199,29 @@ def static_refresh_audit():
             "final_eval_line": tail[0].lineno,
             "refresh_ast": ast.dump(guard, include_attributes=False),
         }
-    # P4b-2 keeps epoch0 in MouseBrain, then delegates the only epoch loop.
+    # U4c moves orchestration to the public task, preserving an unconditional
+    # epoch0 before both dry return and the sole shared fit call.
     mouse_tree = ast.parse((ROOT / "scripts/run_mousebrain.py").read_text())
     mouse_run = next(n for n in mouse_tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_mousebrain")
-    assert not any(isinstance(n, ast.For) and isinstance(n.target, ast.Name) and n.target.id == "epoch" for n in ast.walk(mouse_run))
-    dry = [n for n in ast.walk(mouse_run) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "model"]
-    shared = [n for n in ast.walk(mouse_run) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "train_small_crc_model"]
-    assert len(dry) == len(shared) == 1 and dry[0].lineno < shared[0].lineno
-    assert any(k.arg == "epoch" and isinstance(k.value, ast.Constant) and k.value.value == 0 for k in dry[0].keywords)
-    assert any(isinstance(n, ast.With) and dry[0] in list(ast.walk(n)) and any(ast.unparse(i.context_expr) == "torch.no_grad()" for i in n.items) for n in ast.walk(mouse_run))
-    result["scripts/run_mousebrain.py"] = {"status": "STATIC_ONLY: independent epoch0 then shared fit", "dry_forward_line": dry[0].lineno, "fit_line": shared[0].lineno}
+    task_tree = ast.parse((ROOT / "training/mousebrain_task.py").read_text())
+    task = next(n for n in task_tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_mousebrain_training_task")
+    runtime_tree = ast.parse((ROOT / "training/task_runtime.py").read_text())
+    preflight = next(n for n in runtime_tree.body if isinstance(n, ast.FunctionDef) and n.name == "run_epoch0_preflight")
+    for fn in [mouse_run, task, preflight]:
+        assert not any(isinstance(n, ast.For) and isinstance(n.target, ast.Name) and n.target.id == "epoch" for n in ast.walk(fn))
+    task_calls = [n for n in ast.walk(mouse_run) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "run_mousebrain_training_task"]
+    dry = [n for n in ast.walk(task) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "run_epoch0_preflight"]
+    shared = [n for n in ast.walk(task) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "train_small_crc_model"]
+    assert len(task_calls) == len(dry) == len(shared) == 1 and dry[0].lineno < shared[0].lineno
+    assert any(isinstance(n, ast.Assign) and n.value is dry[0] for n in task.body)
+    policy = next(k.value for k in dry[0].keywords if k.arg == "policy")
+    assert isinstance(policy, ast.Call) and ast.unparse(policy.func) == "Epoch0Policy"
+    assert any(k.arg == "eval_mode" and isinstance(k.value, ast.Constant) and k.value.value is False for k in policy.keywords)
+    forwards = [n for n in ast.walk(preflight) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "model"]
+    assert len(forwards) == 1
+    assert any(k.arg == "epoch" and isinstance(k.value, ast.Constant) and k.value.value == 0 for k in forwards[0].keywords)
+    assert any(isinstance(n, ast.With) and forwards[0] in list(ast.walk(n)) and any(ast.unparse(i.context_expr) == "torch.no_grad()" for i in n.items) for n in ast.walk(preflight))
+    result["scripts/run_mousebrain.py"] = {"status": "STATIC_ONLY: independent epoch0 then shared fit", "task_file": "training/mousebrain_task.py", "preflight_file": "training/task_runtime.py", "dry_forward_line": forwards[0].lineno, "fit_line": shared[0].lineno}
     epochs = [0, 1, 19, 20, 99, 100, 101, 119, 120, 199, 200, 201]
     actual = {str(e): should_update_ot(e, 20) for e in epochs}
     assert [e for e in epochs if actual[str(e)]] == [100, 120, 200]
@@ -369,7 +381,7 @@ def run_step(bundle, inputs, variant="main", chunked=False, checkpoint=False,
                       section_order=order, epoch=0)
         phase[0] = "fit"
         with patch.object(torch.optim, "Adam", make_adam):
-            history, final, updated_epochs = crc.train_small_crc_model(
+            history, final, updated_epochs = fit_runtime.train_small_crc_model(
                 model, features, inputs["spatial_loc_dict"], None, order, args)
     assert updated_epochs == []
     assert len(history) == 1
@@ -397,7 +409,7 @@ def run_step(bundle, inputs, variant="main", chunked=False, checkpoint=False,
     return observation, meta, model, final
 
 
-def sparse_probe(model, inputs, args_dict, final=None, helper_module=mouse):
+def sparse_probe(model, inputs, args_dict, final=None, helper_module=fit_runtime):
     captures, extractions = [], []
     real_solver = sparse_uot.sparse_unbalanced_sinkhorn_bidirectional_topk
     real_extract = sparse_uot._edges_to_sparse_topk

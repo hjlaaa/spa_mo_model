@@ -6,7 +6,7 @@ import argparse
 import copy
 import contextlib
 import hashlib
-import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -23,8 +23,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-spatch = importlib.import_module("scripts.run_spatch")
-from scripts import run_experiments as batch
+from data_io import spatch_preparation as spatch_cache
+from data_io import spatch_raw
+from training import task_runtime, spatch_task
 
 
 def sha(path):
@@ -78,10 +79,10 @@ def fixture(root):
     cache.mkdir()
     output.mkdir()
     args = SimpleNamespace(n_comps=50, hvg_num=3000, no_harmony=False, data_dir=raw, output_dir=output)
-    params = spatch.cache_parameters(args)
+    params = spatch_cache.cache_parameters(args)
     records, source_files, metadata, alignment = [], [], [], {}
     values = {}
-    for si, (section, n) in enumerate(zip(spatch.SECTIONS, (3, 5))):
+    for si, (section, n) in enumerate(zip(spatch_cache.SECTIONS, (3, 5))):
         coords = np.array([[si * 100 + i * 3, i * 7] for i in range(n)], dtype=np.float32)
         values[section] = {}
         for mi, (modality, dims) in enumerate((("RNA", 50), ("Protein", 15), ("HE", 50))):
@@ -90,7 +91,7 @@ def fixture(root):
             path = cache / f"{section}_{modality}.npy"
             np.save(path, value, allow_pickle=False)
             records.append({"kind": "feature", "section": section, "modality": modality, "relative_path": path.name, "shape": list(value.shape), "dtype": str(value.dtype), "size_bytes": path.stat().st_size, "sha256": sha(path)})
-            source = raw / section / spatch.FILES[section][mi]
+            source = raw / section / spatch_cache.FILES[section][mi]
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_bytes(f"synthetic-{section}-{modality}".encode())
             source_files.append({"section": section, "modality": modality, "path": str(source), "size_bytes": source.stat().st_size, "mtime_ns": source.stat().st_mtime_ns, "sha256": sha(source)})
@@ -103,7 +104,7 @@ def fixture(root):
     pd.DataFrame(metadata).to_csv(cache / "spot_metadata.csv.gz", index=False, compression="gzip")
     pd.Series([f"gene_{i}" for i in range(4828)], name="gene").to_csv(cache / "shared_rna_genes.csv", index=False)
     pd.Series([f"marker_{i}" for i in range(16)], name="protein_marker").to_csv(cache / "protein_markers_after_dapi_removal.csv", index=False)
-    artifacts = [{"relative_path": name, "size_bytes": (cache / name).stat().st_size, "sha256": sha(cache / name)} for name in spatch.CACHE_METADATA_FILES]
+    artifacts = [{"relative_path": name, "size_bytes": (cache / name).stat().st_size, "sha256": sha(cache / name)} for name in spatch_cache.CACHE_METADATA_FILES]
     manifest = {"schema_version": 1, "dataset": "spatch", "cache_boundary": "model_ready_feature_dict_after_PCA_Harmony", "parameters": params, "arrays": records, "metadata_artifacts": artifacts, "source_files": source_files, "alignment": alignment, "software_versions": {"python": "synthetic fixture"}, "preprocessing_sources": {"run_spatch.py": sha(REPO / "scripts/run_spatch.py"), "model/data_preprocessing.py": sha(REPO / "data_io/preprocessing.py")}, "created_at": 0}
     write_json(cache / "manifest.json", manifest)
     return SimpleNamespace(root=root, cache=cache, raw=raw, output=output, args=args, manifest=manifest, values=values)
@@ -143,7 +144,7 @@ def guarded(f):
         return fail
     with contextlib.ExitStack() as stack:
         for name in names:
-            stack.enter_context(patch.object(spatch, name, forbidden(name)))
+            stack.enter_context(patch.object(spatch_raw, name, forbidden(name)))
         _guard = (f.cache.absolute(), events, (f.root / "raw").absolute(), raw_reads)
         try:
             yield calls, events
@@ -159,13 +160,13 @@ def load_case(f):
     result, error = None, None
     with guarded(f) as (calls, events):
         try:
-            result = spatch.load_preprocessed_cache(f.cache, f.raw, f.output, f.args)
+            result = spatch_cache.load_preprocessed_cache(f.cache, f.raw, f.output, f.args)
         except Exception as exc:
             error = {"type": type(exc).__name__, "message": str(exc)}
     if result is not None:
         features, spatial, alignment, cache_info = result
-        assert list(features) == list(spatch.SECTIONS)
-        for section in spatch.SECTIONS:
+        assert list(features) == list(spatch_cache.SECTIONS)
+        for section in spatch_cache.SECTIONS:
             assert list(features[section]) == ["RNA", "Protein", "HE"]
             for modality in ("RNA", "Protein", "HE"):
                 assert features[section][modality].dtype == torch.float32
@@ -221,11 +222,13 @@ class ReachedModel(BaseException):
 
 
 def main_case(f, extra, expected_model):
+    # The canonical CLI is the test subject, never a business helper provider.
+    from scripts import run_spatch as cli_subject
     called = {"model": 0, "require_gpu": 0, "training": 0, "save_embeddings": 0, "prior": 0}
     def model(*args, **kwargs):
         called["model"] += 1
         features = kwargs["feature_dict"]
-        for section in spatch.SECTIONS:
+        for section in spatch_cache.SECTIONS:
             for modality in ("RNA", "Protein", "HE"):
                 assert np.array_equal(features[section][modality].numpy(), f.values[section][modality])
         raise ReachedModel()
@@ -242,14 +245,14 @@ def main_case(f, extra, expected_model):
     argv = ["run_spatch.py", "--output_dir", str(f.output)] + extra
     with guarded(f) as (calls, events), contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(sys, "argv", argv))
-        stack.enter_context(patch.object(spatch, "StageMultiModalModel", model))
-        stack.enter_context(patch.object(spatch, "require_gpu", gpu))
-        stack.enter_context(patch.object(spatch, "record_memory", lambda *a, **k: None))
+        stack.enter_context(patch.object(task_runtime, "StageMultiModalModel", model))
+        stack.enter_context(patch.object(cli_subject, "require_gpu", gpu))
+        stack.enter_context(patch.object(cli_subject, "record_memory", lambda *a, **k: None))
         stack.enter_context(patch.object(torch.cuda, "is_available", lambda: False))
         for name, count_name in (("train_small_crc_model", "training"), ("save_final_embeddings", "save_embeddings"), ("initialize_model_ot_prior", "prior")):
-            stack.enter_context(patch.object(spatch, name, forbidden(count_name)))
+            stack.enter_context(patch.object(spatch_task, name, forbidden(count_name)))
         try:
-            spatch.main()
+            cli_subject.main()
         except ReachedModel:
             reached = True
         except Exception as exc:
@@ -306,12 +309,20 @@ def check_command(f, output_root, reference):
     tokens[tokens.index("--preprocessed_cache_dir") + 1] = str(f.cache)
     i = tokens.index("--output_dir")
     del tokens[i:i + 2]
-    args = batch.parse_args(["--datasets", "spatch", "--output-root", str(output_root),
-                            "--runner-args", "spatch", json.dumps(tokens)])
-    command = batch.build_tasks(args)[0]["command"]
-    resolved = spatch.parse_args(command[2:])
+    # Test the documented print-only CLI, not its parser/build_tasks internals.
+    from scripts.run_experiments import main as batch_cli
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        assert batch_cli(["--datasets", "spatch", "--output-root", str(output_root),
+                          "--runner-args", "spatch", json.dumps(tokens), "--dry-run"]) == 0
+    command = json.loads(printed.getvalue())[0]["command"]
+    # Cache checks consume explicit fixture options. The frozen command must
+    # agree with them; no second parser or defaults are supplied by a runner.
+    for flag, value in (("--n_comps", f.args.n_comps), ("--hvg_num", f.args.hvg_num)):
+        assert command[command.index(flag) + 1] == str(value)
+    assert ("--no_harmony" in command) == f.args.no_harmony
     # Exercise the authority loader, guarded against raw I/O, build and cache writes.
-    spatch.load_preprocessed_cache(f.cache, f.raw, f.output, resolved)
+    spatch_cache.load_preprocessed_cache(f.cache, f.raw, f.output, f.args)
     return command
 
 
@@ -353,7 +364,7 @@ def check_new(output_dir, reference_dir, report_name):
             observed = load_case(f)
             assert observed["accepted"] is accepted, observed
             if accepted:
-                assert observed["metadata_output_files"] == sorted(spatch.CACHE_METADATA_FILES), observed
+                assert observed["metadata_output_files"] == sorted(spatch_cache.CACHE_METADATA_FILES), observed
             else:
                 assert observed["error"] and observed["error"]["type"] in {"ValueError", "FileNotFoundError"}, observed
                 assert not observed["metadata_output_files"], observed
@@ -442,7 +453,7 @@ def check_new(output_dir, reference_dir, report_name):
             error = None
             with guarded(f) as (calls, events):
                 try:
-                    spatch.load_preprocessed_cache(f.cache, f.raw, output, f.args)
+                    spatch_cache.load_preprocessed_cache(f.cache, f.raw, output, f.args)
                 except Exception as exc:
                     error = {"type": type(exc).__name__, "message": str(exc)}
             assert error and error["type"] == "ValueError", error

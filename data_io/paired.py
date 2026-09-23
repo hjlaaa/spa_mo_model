@@ -5,7 +5,7 @@ Keep input feature and spot order; preprocessing and training stay with callers.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import anndata as ad
 import numpy as np
@@ -176,3 +176,61 @@ def read_spleen_pair(data_dir: Path, sample_dir: str):
     rna, adt = read_backed_pair(data_dir, sample_dir)
     prepare_spleen_adt(adt)
     return rna, adt
+
+
+def spatial_range(spatial: np.ndarray) -> dict[str, list[float]]:
+    arr = np.asarray(spatial)
+    return {
+        "x": [float(arr[:, 0].min()), float(arr[:, 0].max())],
+        "y": [float(arr[:, 1].min()), float(arr[:, 1].max())],
+    }
+
+
+
+def validate_rna_adt_alignment(section: str, rna: ad.AnnData, adt: ad.AnnData) -> dict[str, Any]:
+    obs_match = list(rna.obs_names) == list(adt.obs_names)
+    if not obs_match:
+        raise ValueError(f"{section}: RNA and ADT obs_names are not identical.")
+    if "spatial" not in rna.obsm:
+        raise KeyError(f"{section}: RNA is missing obsm['spatial'].")
+    if "spatial" not in adt.obsm:
+        raise KeyError(f"{section}: ADT is missing obsm['spatial'].")
+    rna_spatial = np.asarray(rna.obsm["spatial"])
+    adt_spatial = np.asarray(adt.obsm["spatial"])
+    spatial_shape_match = rna_spatial.shape == adt_spatial.shape
+    if not spatial_shape_match:
+        raise ValueError(f"{section}: RNA and ADT spatial shapes differ.")
+    spatial_match = bool(np.allclose(rna_spatial, adt_spatial))
+    if not spatial_match:
+        raise ValueError(f"{section}: RNA and ADT spatial coordinates differ.")
+    return {
+        "spot_count": int(rna.n_obs),
+        "obs_names_match": obs_match,
+        "spatial_key_present": True,
+        "spatial_shape": list(rna_spatial.shape),
+        "spatial_match": spatial_match,
+        "spatial_range": spatial_range(rna_spatial),
+    }
+
+
+
+def select_obs_indices(
+    n_obs: int,
+    max_spots: int | None,
+    sampling: str,
+    rng: np.random.Generator,
+) -> np.ndarray | slice:
+    if max_spots is None or max_spots <= 0 or max_spots >= n_obs:
+        return slice(None)
+    if sampling == "first":
+        return np.arange(max_spots)
+    if sampling == "random":
+        # Sort sampled indices so backed slicing keeps original spot order.
+        return np.sort(rng.choice(n_obs, size=max_spots, replace=False))
+    raise ValueError(f"Unsupported spot sampling mode: {sampling}")
+
+
+
+def rename_section_keys(mapping: Mapping[str, Any], section_key_map: Mapping[str, str]) -> dict[str, Any]:
+    """Rename section keys with an explicit mapping, preserving value references."""
+    return {section_key_map.get(section, section): value for section, value in mapping.items()}
