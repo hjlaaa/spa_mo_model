@@ -96,6 +96,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--max_spots_per_section", type=int, default=None)
     parser.add_argument("--source_chunk_rows", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--lambda_contrast", type=float, default=None)
+    parser.add_argument("--lambda_spatial_gaussian", type=float, default=None)
+    parser.add_argument("--spatial_enhancement", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--spatial_enhancement_k", type=int, default=10)
+    parser.add_argument("--spatial_enhancement_weight", type=float, default=0.2)
+    parser.add_argument("--spatial_enhancement_include_self", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
@@ -187,7 +193,8 @@ def build_model_config(args: argparse.Namespace) -> dict[str, Any]:
         lr=float(args.lr),
         weight_decay=float(args.weight_decay),
     )
-    config["loss"]["lambda_contrast"] = 0.0
+    config["loss"]["lambda_contrast"] = 0.0 if args.lambda_contrast is None else args.lambda_contrast
+    config["loss"]["lambda_spatial_gaussian"] = args.lambda_spatial_gaussian or 0.0
     config["uot"]["enabled"] = not bool(args.disable_uot)
     config["ot_attention"]["enabled"] = not bool(args.disable_uot)
     config["uot"].update(
@@ -284,6 +291,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return summary
 
     prepared = prepare_dataset(preparation_source)
+    if args.spatial_enhancement:
+        from data_io.preprocessing import spatial_enhance_features
+        spatial_enhance_features(
+            prepared.feature_dict, prepared.spatial_loc_dict,
+            k=args.spatial_enhancement_k, weight=args.spatial_enhancement_weight,
+            include_self=args.spatial_enhancement_include_self,
+        )
+        run_config["preprocessing"]["runtime_spatial_enhancement"] = {
+            "enabled": True, "k": args.spatial_enhancement_k,
+            "weight": args.spatial_enhancement_weight,
+            "include_self": args.spatial_enhancement_include_self,
+        }
     preprocess_manifest = prepared.compatibility_context["preprocess_manifest"]
     feature_dict = prepared.feature_dict
     spatial_dict = prepared.spatial_loc_dict

@@ -239,5 +239,6 @@ def get_default_model_config():
         "loss": {
             "lambda_contrast": 0.1,
             "lambda_reconstruction": 1.0,
+            "lambda_spatial_gaussian": 0.0,
         },
     }

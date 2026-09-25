@@ -74,6 +74,7 @@ def parse_args(argv=None):
     parser.add_argument("--epochs", type=int, default=None, help="Override training epochs.")
     parser.add_argument("--max_spots_per_section", type=int, default=None, help="Use the first N spots per section.")
     parser.add_argument("--lambda_contrast", type=float, default=None, help="Override loss.lambda_contrast.")
+    parser.add_argument("--lambda_spatial_gaussian", type=float, default=None)
     parser.add_argument(
         "--lambda_contrast_schedule",
         default=None,
@@ -178,6 +179,7 @@ def build_model_config(
     config: Mapping[str, Any],
     epochs: int | None,
     lambda_contrast: float | None = None,
+    lambda_spatial_gaussian: float | None = None,
     device: str | None = None,
     update_interval: int | None = None,
     attention_topk: int | None = None,
@@ -196,7 +198,8 @@ def build_model_config(
     # None means the user did not provide this CLI override; False is explicit.
     overrides = {
         "training": {"epochs": epochs, "device": device},
-        "loss": {"lambda_contrast": lambda_contrast},
+        "loss": {"lambda_contrast": lambda_contrast,
+                 "lambda_spatial_gaussian": lambda_spatial_gaussian},
         "uot": {
             "update_interval": update_interval,
             "topk": attention_topk,
@@ -225,6 +228,7 @@ def resolve_run_config(config: Mapping[str, Any], args):
         config,
         epochs=args.epochs,
         lambda_contrast=args.lambda_contrast,
+        lambda_spatial_gaussian=args.lambda_spatial_gaussian,
         device=args.device,
         update_interval=args.update_interval,
         attention_topk=args.attention_topk,

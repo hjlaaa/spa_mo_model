@@ -56,15 +56,29 @@ def spatial_enhance_features(feature_dict, spatial_loc_dict, *, k=10, weight=0.2
             graph = graph + scipy.sparse.eye(n_cells, format="csr", dtype=np.float32)
 
         for modality, feature in modalities.items():
-            if feature.ndim != 2 or feature.shape[0] != n_cells:
+            if isinstance(feature, torch.Tensor):
+                values = feature.detach().cpu().numpy()
+            elif isinstance(feature, np.ndarray):
+                # This includes read-only and copy-on-write NumPy memmaps.
+                values = np.asarray(feature)
+            else:
+                raise TypeError(
+                    f"{section}/{modality}: expected a Tensor or NumPy array, "
+                    f"got {type(feature).__name__}"
+                )
+            if values.ndim != 2 or values.shape[0] != n_cells:
                 raise ValueError(
                     f"{section}/{modality}: feature rows do not match spatial coordinates"
                 )
-            values = feature.detach().cpu().numpy()
-            output = values + weight * (graph @ values)
-            modalities[modality] = torch.from_numpy(
-                np.ascontiguousarray(output, dtype=np.float32)
-            )
+            if not np.issubdtype(values.dtype, np.number):
+                raise TypeError(f"{section}/{modality}: features must be numeric")
+            # Keep the input cache untouched and bound dense temporaries for large
+            # sections. The result is always a model-ready float32 CPU Tensor.
+            output = np.empty(values.shape, dtype=np.float32)
+            for start in range(0, n_cells, 65536):
+                end = min(start + 65536, n_cells)
+                output[start:end] = values[start:end] + weight * (graph[start:end] @ values)
+            modalities[modality] = torch.from_numpy(output)
     return feature_dict
 
 

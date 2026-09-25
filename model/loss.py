@@ -9,6 +9,79 @@ from typing import Mapping
 import torch
 
 
+class _GaussianSpatialLaplacian(torch.autograd.Function):
+    """Chunked Gaussian graph loss with O(ND) backward storage."""
+
+    @staticmethod
+    def forward(ctx, embedding, edge_index, edge_weight, edge_batch_size):
+        source, target = edge_index
+        weights = edge_weight.float()
+        row_weight = torch.zeros(embedding.shape[0], device=embedding.device, dtype=torch.float32)
+        for start in range(0, source.numel(), edge_batch_size):
+            end = min(start + edge_batch_size, source.numel())
+            src, dst = source[start:end], target[start:end]
+            nonself = src != dst
+            row_weight.index_add_(0, src[nonself], weights[start:end][nonself])
+        if bool((row_weight <= 0).any()):
+            raise ValueError("Every spot needs at least one non-self spatial edge.")
+        loss = torch.zeros((), device=embedding.device, dtype=torch.float32)
+        for start in range(0, source.numel(), edge_batch_size):
+            end = min(start + edge_batch_size, source.numel())
+            src, dst = source[start:end], target[start:end]
+            nonself = src != dst
+            src, dst = src[nonself], dst[nonself]
+            if src.numel() == 0:
+                continue
+            strength = weights[start:end][nonself] / row_weight[src]
+            difference = embedding[src].float() - embedding[dst].float()
+            loss += (strength * difference.square().mean(dim=1)).sum()
+        ctx.save_for_backward(embedding, edge_index, edge_weight, row_weight)
+        ctx.edge_batch_size = edge_batch_size
+        return loss / embedding.shape[0]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        embedding, edge_index, edge_weight, row_weight = ctx.saved_tensors
+        source, target = edge_index
+        weights = edge_weight.float()
+        gradient = torch.zeros(embedding.shape, device=embedding.device, dtype=torch.float32)
+        factor = 2.0 / (embedding.shape[0] * embedding.shape[1])
+        for start in range(0, source.numel(), ctx.edge_batch_size):
+            end = min(start + ctx.edge_batch_size, source.numel())
+            src, dst = source[start:end], target[start:end]
+            nonself = src != dst
+            src, dst = src[nonself], dst[nonself]
+            if src.numel() == 0:
+                continue
+            strength = weights[start:end][nonself] / row_weight[src]
+            difference = embedding[src].float() - embedding[dst].float()
+            contribution = factor * strength.unsqueeze(1) * difference
+            gradient.index_add_(0, src, contribution)
+            gradient.index_add_(0, dst, -contribution)
+        return (gradient * grad_output.float()).to(embedding.dtype), None, None, None
+
+
+def gaussian_spatial_laplacian_loss(
+    embedding: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_weight: torch.Tensor,
+    *,
+    edge_batch_size: int = 200000,
+) -> torch.Tensor:
+    """Gaussian-weighted non-self smoothness, averaged per spot and dimension.
+
+    Reuses the spatial GraphSAGE graph and renormalizes after removing its
+    self-loops. Forward/backward chunk edges for full-spot CRC/SPATCH runs.
+    """
+    if embedding.ndim != 2 or edge_index.shape[0] != 2:
+        raise ValueError("Expected embedding [N, D] and edge_index [2, E].")
+    if edge_weight.ndim != 1 or edge_weight.numel() != edge_index.shape[1]:
+        raise ValueError("edge_weight must have one value per edge.")
+    if edge_batch_size <= 0:
+        raise ValueError("edge_batch_size must be positive.")
+    return _GaussianSpatialLaplacian.apply(embedding, edge_index, edge_weight, edge_batch_size)
+
+
 # Adapted from /home/hujinlan/cosie/COSIE/loss.py::compute_joint
 def compute_joint(view1: torch.Tensor, view2: torch.Tensor) -> torch.Tensor:
     """Compute COSIE's dimension-level joint-dependency matrix.

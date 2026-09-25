@@ -33,11 +33,11 @@ OUTPUT_DIR = Path(
     "bidirectional_sparse_uot_fixed_lc0.1_seed42"
 )
 
-def _write_adapter_audit(data_dir: Path, output_dir: Path) -> None:
+def _write_adapter_audit(data_dir: Path, output_dir: Path, sections=SECTIONS) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     common_rna: set[str] | None = None
-    for section in SECTIONS:
+    for section in sections:
         rna = ad.read_h5ad(data_dir / section / "adata_RNA.h5ad", backed="r")
         adt = ad.read_h5ad(data_dir / section / "adata_ADT.h5ad", backed="r")
         try:
@@ -65,8 +65,8 @@ def _write_adapter_audit(data_dir: Path, output_dir: Path) -> None:
     (output_dir / "input_adaptation.json").write_text(
         json.dumps(
             {
-                "sections": SECTIONS,
-                "total_spots": 17824,
+                "sections": list(sections),
+                "total_spots": int(sum(int(row["rna_shape"].split("x")[0]) for row in rows)),
                 "shared_rna_features": len(common_rna or set()),
                 "shared_adt_features": ADT_ORDER,
                 "coordinate_policy": "RNA obs[x,y] copied to RNA/ADT obsm['spatial']",
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> None:
         args, section_info=section_info, dataset_name="Mouse Thymus",
         secondary_modality="Protein", secondary_name="adt",
     )
-    _write_adapter_audit(Path(args.data_dir), Path(args.output_dir))
+    _write_adapter_audit(Path(args.data_dir), Path(args.output_dir), run_config["section_order"])
     run_multisection_entry(
         args,
         read_pair=read_pair,

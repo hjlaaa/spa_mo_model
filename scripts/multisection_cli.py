@@ -38,6 +38,7 @@ def parse_args(
     parser.add_argument("--train", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lambda_contrast", type=float, default=None)
+    parser.add_argument("--lambda_spatial_gaussian", type=float, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--update_interval", type=int, default=None)
@@ -130,9 +131,10 @@ def make_model_config(args, secondary_modality: str = "ATAC") -> dict[str, Any]:
                 "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             },
         },
-        explicit_overrides={"loss": {"lambda_contrast": (
-            float(args.lambda_contrast) if args.lambda_contrast is not None else None
-        )}},
+        explicit_overrides={"loss": {
+            "lambda_contrast": float(args.lambda_contrast) if args.lambda_contrast is not None else None,
+            "lambda_spatial_gaussian": args.lambda_spatial_gaussian,
+        }},
     )
     config["model"]["modalities_supported"] = ["RNA", secondary_modality]
     config["model"]["valid_modality_sets"] = [["RNA", secondary_modality]]

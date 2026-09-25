@@ -80,6 +80,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--lambda_contrast", type=float, default=None)
+    parser.add_argument("--lambda_spatial_gaussian", type=float, default=None)
     parser.add_argument("--update_interval", type=int, default=None)
     parser.add_argument("--uot_max_iter", type=int, default=None)
     parser.add_argument("--candidate_backend", default=None)
@@ -222,7 +223,8 @@ def build_model_config(args):
             "device": "cuda", "epochs": args.epochs,
             "lr": args.lr, "weight_decay": args.weight_decay,
         },
-        "loss": {"lambda_contrast": args.lambda_contrast},
+        "loss": {"lambda_contrast": args.lambda_contrast,
+                 "lambda_spatial_gaussian": args.lambda_spatial_gaussian or 0.0},
         "uot": {
             "max_iter": args.uot_max_iter, "topk": args.attention_topk,
             "update_interval": args.update_interval,

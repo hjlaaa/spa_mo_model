@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -14,6 +15,7 @@ from torch.utils.checkpoint import checkpoint as torch_checkpoint
 from .configure import get_default_model_config, reject_unsupported_model_config
 from .loss import (
     compute_pairwise_cosie_crossview_loss,
+    gaussian_spatial_laplacian_loss,
 )
 from .model_component import (
     FusionMLP,
@@ -895,6 +897,9 @@ class StageMultiModalModel(nn.Module):
         contrastive_gamma = float(self.config["contrastive"]["gamma"])
         lambda_contrast = float(self.config["loss"]["lambda_contrast"])
         lambda_reconstruction = float(self.config["loss"]["lambda_reconstruction"])
+        lambda_spatial_gaussian = float(self.config["loss"].get("lambda_spatial_gaussian", 0.0))
+        if not math.isfinite(lambda_spatial_gaussian) or lambda_spatial_gaussian < 0:
+            raise ValueError("loss.lambda_spatial_gaussian must be finite and non-negative.")
         lambda_by_modality = self.config["reconstruction"]["lambda_by_modality"]
         keep_full_outputs = bool(return_full_outputs) and not bool(training_loss_only)
         use_encoder_fusion_checkpoint = bool(
@@ -923,6 +928,7 @@ class StageMultiModalModel(nn.Module):
         ]
         crossview_loss = torch.zeros((), device=device)
         reconstruction_loss = torch.zeros((), device=device)
+        spatial_gaussian_loss = torch.zeros((), device=device, dtype=torch.float32)
         expected_modality_order: tuple[str, ...] | None = None
         _record_forward_memory(
             memory_recorder,
@@ -1246,6 +1252,15 @@ class StageMultiModalModel(nn.Module):
                 },
             )
 
+        if lambda_spatial_gaussian:
+            for section in resolved_order:
+                graph = spatial_graph_dict[section]
+                spatial_gaussian_loss = spatial_gaussian_loss + gaussian_spatial_laplacian_loss(
+                    final_embeddings[section], graph["edge_index"], graph["edge_weight"],
+                    edge_batch_size=int(graph_sage_cfg.get("edge_batch_size") or 200000),
+                )
+            spatial_gaussian_loss = spatial_gaussian_loss / len(resolved_order)
+
         if self.config["decoder"]["enabled"] and self.config["reconstruction"]["enabled"]:
             for section in resolved_order:
                 section_rec_loss, section_rec_details, section_recon = self._decode_and_reconstruct_section(
@@ -1263,7 +1278,11 @@ class StageMultiModalModel(nn.Module):
                     reconstruction_details[section] = section_rec_details
                     reconstructions[section] = section_recon
 
-        total_loss = lambda_reconstruction * reconstruction_loss + lambda_contrast * crossview_loss
+        total_loss = (
+            lambda_reconstruction * reconstruction_loss
+            + lambda_contrast * crossview_loss
+            + lambda_spatial_gaussian * spatial_gaussian_loss
+        )
         _record_forward_memory(
             memory_recorder,
             "end",
@@ -1287,11 +1306,13 @@ class StageMultiModalModel(nn.Module):
                     "total_loss": total_loss.float(),
                     "crossview_loss": crossview_loss.float(),
                     "reconstruction_loss": reconstruction_loss.float(),
+                    "spatial_gaussian_loss": spatial_gaussian_loss.float(),
                 },
                 "loss_scalars": {
                     "total_loss": float(total_loss.detach().cpu().item()),
                     "crossview_loss": float(crossview_loss.detach().cpu().item()),
                     "reconstruction_loss": float(reconstruction_loss.detach().cpu().item()),
+                    "spatial_gaussian_loss": float(spatial_gaussian_loss.detach().cpu().item()),
                 },
                 "messages": messages,
             }
@@ -1317,6 +1338,7 @@ class StageMultiModalModel(nn.Module):
                 "total_loss": total_loss,
                 "crossview_loss": crossview_loss,
                 "reconstruction_loss": reconstruction_loss,
+                "spatial_gaussian_loss": spatial_gaussian_loss,
             },
             "loss_details": {
                 "crossview": crossview_details,

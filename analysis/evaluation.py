@@ -36,7 +36,11 @@ def load_dataset(dataset, run_dir, data_dir, output_dir, *, method_name):
     elif dataset == "mouse_spleen":
         data = loaders.load_paired_rna_adt(run_dir, data_dir, section_order=["Mouse_Spleen1", "Mouse_Spleen2"], **kw)
     elif dataset == "mouse_thymus":
-        data = loaders.load_thymus(run_dir, data_dir, section_order=[f"Mouse_Thymus{i}" for i in range(1, 5)], **kw)
+        saved_order = json.loads((run_dir / "run_summary.json").read_text())["section_names"]
+        allowed = [f"Mouse_Thymus{i}" for i in range(1, 5)]
+        if not saved_order or saved_order != [s for s in allowed if s in saved_order]:
+            raise ValueError("Invalid saved Mouse Thymus section order.")
+        data = loaders.load_thymus(run_dir, data_dir, section_order=saved_order, **kw)
     elif dataset == "simulation":
         data = loaders.load_simulation(run_dir, data_dir, section_order=[f"Simulation{i}" for i in range(1, 6)], **kw)
     elif dataset == "crc_stereocite":

@@ -378,6 +378,7 @@ def iter_fit_model(
         total_loss_value = float(loss.detach().cpu().item())
         crossview_loss_value = float(outputs["losses"]["crossview_loss"].detach().cpu().item())
         reconstruction_loss_value = float(outputs["losses"]["reconstruction_loss"].detach().cpu().item())
+        spatial_gaussian_loss_value = float(outputs["losses"]["spatial_gaussian_loss"].detach().cpu().item())
         record = {"epoch": int(epoch)}
         if record_loss_weights:
             record["lambda_contrast"] = float(model.config["loss"]["lambda_contrast"])
@@ -385,6 +386,11 @@ def iter_fit_model(
             total_loss=total_loss_value,
             crossview_loss=crossview_loss_value,
             reconstruction_loss=reconstruction_loss_value,
+            spatial_gaussian_loss=spatial_gaussian_loss_value,
+            lambda_spatial_gaussian=float(model.config["loss"].get("lambda_spatial_gaussian", 0.0)),
+            weighted_spatial_gaussian_loss=(
+                spatial_gaussian_loss_value * float(model.config["loss"].get("lambda_spatial_gaussian", 0.0))
+            ),
         )
         if record_elapsed_time:
             record["elapsed_time_sec"] = float(time.time() - start_time)
