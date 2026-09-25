@@ -41,6 +41,7 @@ def parse_args(argv=None):
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--interaction-neighbor-weight", type=float, default=None)
     parser.add_argument("--post-ot-graphsage-scale", type=float, default=None)
     parser.add_argument("--keep-going", action="store_true", help="Run remaining datasets after a failure.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without writing or starting children.")
@@ -50,6 +51,9 @@ def parse_args(argv=None):
     scale = args.post_ot_graphsage_scale
     if scale is not None and (not math.isfinite(scale) or scale < 0):
         parser.error("--post-ot-graphsage-scale must be finite and non-negative")
+    rho = args.interaction_neighbor_weight
+    if rho is not None and not 0.0 <= rho <= 1.0:
+        parser.error("--interaction-neighbor-weight must be finite and between 0 and 1")
     extras = {}
     for dataset, encoded in args.runner_args:
         if dataset not in args.datasets:
@@ -75,7 +79,7 @@ def build_tasks(args):
         if dataset not in {"mousebrain", "spatch"}:
             command.append("--train")
         command.extend(args.runner_args.get(dataset, []))
-        for name in ("epochs", "seed", "device", "post_ot_graphsage_scale"):
+        for name in ("epochs", "seed", "device", "post_ot_graphsage_scale", "interaction_neighbor_weight"):
             value = getattr(args, name)
             if value is not None:
                 command.extend(["--" + name, str(value)])

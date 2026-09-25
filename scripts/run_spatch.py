@@ -55,6 +55,8 @@ def get_dataset_defaults():
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train spa_mo_model on full-resolution spatch.")
+    parser.add_argument("--interaction_neighbor_weight", type=float, default=None,
+                        help="Target spatial-neighbor fraction in attention values (default: 0; experiment: 0.25).")
     parser.add_argument("--input_mode", choices=["reuse", "raw"], default=None,
                         help="reuse validates an existing cache; raw prepares six aligned H5AD inputs.")
     parser.add_argument("--output_cache_dir", type=Path, default=None,
@@ -236,6 +238,8 @@ def build_model_config(args):
             "edge_batch_size": args.graphsage_edge_batch_size,
             "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
         },
+    }, explicit_overrides={
+        "ot_attention": {"interaction_neighbor_weight": getattr(args, "interaction_neighbor_weight", None)},
     })
     return config
 

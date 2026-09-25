@@ -59,6 +59,9 @@ def resolve_model_config(*, base=None, model_config=None, input_config=None, exp
     if explicit_overrides is not None:
         reject_unsupported_model_config(explicit_overrides)
         apply_explicit_overrides(resolved, deepcopy(explicit_overrides))
+    rho = float(resolved.get("ot_attention", {}).get("interaction_neighbor_weight", 0.0))
+    if not 0.0 <= rho <= 1.0:
+        raise ValueError("ot_attention.interaction_neighbor_weight must be finite and between 0 and 1.")
     return resolved
 
 

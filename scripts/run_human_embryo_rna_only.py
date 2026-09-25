@@ -58,6 +58,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the HESTA human-embryo dataset through SpaMO's explicit RNA-only mode."
     )
+    parser.add_argument("--interaction_neighbor_weight", type=float, default=None,
+                        help="Target spatial-neighbor fraction in attention values (default: 0; experiment: 0.25).")
     parser.add_argument("--data_dir", default=None)
     parser.add_argument(
         "--output_dir",
@@ -182,7 +184,9 @@ def load_external_preprocessed_run(
 
 
 def build_model_config(args: argparse.Namespace) -> dict[str, Any]:
-    config = resolve_model_config()
+    config = resolve_model_config(explicit_overrides={
+        "ot_attention": {"interaction_neighbor_weight": getattr(args, "interaction_neighbor_weight", None)},
+    })
     config["model"]["single_modality_mode"] = {
         "enabled": True,
         "modality": args.single_modality,

@@ -58,3 +58,5 @@ python -m tools.validation.check_gpu_report --profile spatch_bf16 --process-exit
 仓库没有独立 `tests/`。历史 `refactor_checks` 的 oracle、fixture、expected 和旧 import 属于冻结证据，不批量改写；需要重放时使用其冻结环境/源码。本批接口回归放在新的 [U7c 目录](../../refactor_checks/u7c_validation_dependencies_20260922/REPORT.md)。历史 probe 使用的 `replay_model.crc/mouse` 模块别名不再是当前工具接口，当前使用 `replay_model.fit_runtime`；生产 runner 原公开兼容 API 未删除。
 
 继续从仓库根目录以 `python -m tools.validation...` 运行；外部 cwd 可显式设置仓库根 `PYTHONPATH`。validation 源码不插入 scripts 路径，不引入安装/package 布局变化。`EXPECTED_HEAD` 的旧值仅是未使用的历史常量，不代表当前工作树、验收起点或运行限制。完整 GPU replay、已知 smoke 文案失败均不在本批重跑或修正范围。
+
+邻域 Value 实验回归：`python -m unittest tools.validation.test_interaction_neighbor -v`；配置和对照方案见 [实验说明](../../docs/interaction_neighbor_value.md)。

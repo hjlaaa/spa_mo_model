@@ -205,6 +205,7 @@ def get_default_model_config():
         },
         "ot_attention": {
             "enabled": True,
+            "interaction_neighbor_weight": 0.0,
             # The scalar gate uses source/message features (4 * 128).
             "d_attn": 128,
             "beta": 0.2,

@@ -31,6 +31,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Train StageMultiModalModel V2 on preprocessed multimodal features.",
     )
+    parser.add_argument("--interaction_neighbor_weight", type=float, default=None,
+                        help="Target spatial-neighbor fraction in attention values (default: 0; experiment: 0.25).")
     parser.add_argument(
         "--input_bundle",
         default=None,
@@ -112,6 +114,7 @@ def build_model_config(args):
     config = resolve_model_config(
         model_config=supplied,
         explicit_overrides={
+            "ot_attention": {"interaction_neighbor_weight": getattr(args, "interaction_neighbor_weight", None)},
             "training": {
                 "epochs": args.epochs, "lr": args.lr,
                 "weight_decay": args.weight_decay, "device": args.device,

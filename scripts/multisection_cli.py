@@ -25,6 +25,8 @@ def parse_args(
     secondary_name: str = "atac",
 ):
     parser = argparse.ArgumentParser(description=f"Run {dataset_name} RNA+{secondary_modality} StageMultiModalModel pipeline.")
+    parser.add_argument("--interaction_neighbor_weight", type=float, default=None,
+                        help="Target spatial-neighbor fraction in attention values (default: 0; experiment: 0.25).")
     parser.add_argument("--data_dir", default=None)
     parser.add_argument(
         "--section_order",
@@ -131,10 +133,13 @@ def make_model_config(args, secondary_modality: str = "ATAC") -> dict[str, Any]:
                 "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             },
         },
-        explicit_overrides={"loss": {
-            "lambda_contrast": float(args.lambda_contrast) if args.lambda_contrast is not None else None,
-            "lambda_spatial_gaussian": args.lambda_spatial_gaussian,
-        }},
+        explicit_overrides={
+            "ot_attention": {"interaction_neighbor_weight": getattr(args, "interaction_neighbor_weight", None)},
+            "loss": {
+                "lambda_contrast": float(args.lambda_contrast) if args.lambda_contrast is not None else None,
+                "lambda_spatial_gaussian": args.lambda_spatial_gaussian,
+            },
+        },
     )
     config["model"]["modalities_supported"] = ["RNA", secondary_modality]
     config["model"]["valid_modality_sets"] = [["RNA", secondary_modality]]

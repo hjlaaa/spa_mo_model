@@ -344,6 +344,9 @@ class StageMultiModalModel(nn.Module):
         )
 
         attn_cfg = self.config["ot_attention"]
+        self.interaction_neighbor_weight = float(attn_cfg.get("interaction_neighbor_weight", 0.0))
+        if not 0.0 <= self.interaction_neighbor_weight <= 1.0:
+            raise ValueError("ot_attention.interaction_neighbor_weight must be finite and between 0 and 1.")
         self.ot_attention = OTGuidedAttention(
             dim=self.latent_dim,
             d_attn=int(attn_cfg["d_attn"]),
@@ -1155,6 +1158,20 @@ class StageMultiModalModel(nn.Module):
                 )
             if self.ot_prior is None:
                 self.ot_prior = {}
+            # Current forward's pre-OT embeddings only; never reuse refresh contexts.
+            interaction_values: dict[str, torch.Tensor] = {}
+            rho = self.interaction_neighbor_weight
+            if rho > 0.0:
+                for section, h in graphsage_embeddings.items():
+                    graph = spatial_graph_dict[section]
+                    neighbors = spatial_pool_self_excluded(
+                        h, graph["edge_index"], graph["edge_weight"],
+                        edge_batch_size=graph_sage_cfg.get("edge_batch_size", 200000),
+                        eps=float(self.config["ot_attention"]["delta"]),
+                        l2_normalize=False,
+                        detach=False,
+                    )
+                    interaction_values[section] = (1.0 - rho) * h + rho * neighbors
             update_lists: dict[str, list[torch.Tensor]] = {section: [] for section in resolved_order}
             for (source_section, target_section), prior in (self.ot_prior or {}).items():
                 if source_section not in update_lists or target_section not in graphsage_embeddings:
@@ -1162,6 +1179,7 @@ class StageMultiModalModel(nn.Module):
                 update = self.ot_attention.compute_update_only(
                     source_h=graphsage_embeddings[source_section],
                     target_h=graphsage_embeddings[target_section],
+                    target_value=interaction_values.get(target_section),
                     topk_idx=prior["topk_idx"],
                     topk_weight=prior["topk_weight"],
                     confidence=prior["confidence"],

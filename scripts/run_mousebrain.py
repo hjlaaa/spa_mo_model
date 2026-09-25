@@ -69,6 +69,8 @@ def get_dataset_defaults():
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run MouseBrain training.")
+    parser.add_argument("--interaction_neighbor_weight", type=float, default=None,
+                        help="Target spatial-neighbor fraction in attention values (default: 0; experiment: 0.25).")
     parser.add_argument("--config", required=True, help="MouseBrain preprocessing/training JSON.", default=None)
     parser.add_argument("--dry_run", action=argparse.BooleanOptionalAction, help="Run preprocessing + one forward pass only.", default=None)
     parser.add_argument("--epochs", type=int, default=None, help="Override training epochs.")
@@ -189,6 +191,7 @@ def build_model_config(
     uot_max_iter: int | None = None,
     spatial_knn_k: int | None = None,
     post_ot_graphsage_scale: float | None = None,
+    interaction_neighbor_weight: float | None = None,
 ):
     # Preserve MouseBrain entry defaults, then merge model and input layers.
     model_config = get_default_model_config()
@@ -197,6 +200,7 @@ def build_model_config(
 
     # None means the user did not provide this CLI override; False is explicit.
     overrides = {
+        "ot_attention": {"interaction_neighbor_weight": interaction_neighbor_weight},
         "training": {"epochs": epochs, "device": device},
         "loss": {"lambda_contrast": lambda_contrast,
                  "lambda_spatial_gaussian": lambda_spatial_gaussian},
@@ -238,8 +242,10 @@ def resolve_run_config(config: Mapping[str, Any], args):
         uot_max_iter=args.uot_max_iter,
         spatial_knn_k=args.spatial_knn_k,
         post_ot_graphsage_scale=args.post_ot_graphsage_scale,
+        interaction_neighbor_weight=getattr(args, "interaction_neighbor_weight", None),
     )
     resolved = argparse.Namespace(**vars(args))
+    resolved.interaction_neighbor_weight = float(model_config["ot_attention"]["interaction_neighbor_weight"])
     training = model_config["training"]
     uot = model_config["uot"]
     # These helper inputs previously lived only in argparse. Their JSON keys

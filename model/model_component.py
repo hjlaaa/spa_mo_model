@@ -269,8 +269,13 @@ def spatial_pool_self_excluded(
     edge_batch_size: int | None = 200000,
     eps: float = 1e-8,
     l2_normalize: bool = True,
+    detach: bool = True,
 ) -> torch.Tensor:
-    """Return a detached, self-excluded weighted spatial-neighbor mean.
+    """Return a self-excluded weighted spatial-neighbor mean.
+
+    ``detach=True`` preserves OT-refresh behavior. Interaction values use
+    ``detach=False, l2_normalize=False`` to retain gradients and mean magnitude.
+    Rows without non-self neighbors return zero.
 
     The aggregation deliberately uses two edge-batched passes: the first
     recomputes per-source weight sums after self-loop removal and the second
@@ -289,7 +294,7 @@ def spatial_pool_self_excluded(
     if eps <= 0.0:
         raise ValueError("eps must be positive.")
 
-    embedding = z.detach()
+    embedding = z.detach() if detach else z
     source = edge_index[0].to(device=embedding.device)
     target = edge_index[1].to(device=embedding.device)
     num_edges = int(source.shape[0])
@@ -333,7 +338,13 @@ def spatial_pool_self_excluded(
         ).unsqueeze(-1)
         context.index_add_(0, source_b, message_b)
 
-    if l2_normalize:
+    if l2_normalize and not detach:
+        # Avoid modifying views needed by autograd in the differentiable path.
+        context = torch.cat([
+            F.normalize(part.float(), dim=1, eps=eps).to(context.dtype)
+            for part in context.split(batch_size)
+        ], dim=0)
+    elif l2_normalize:
         num_nodes = int(context.shape[0])
         for start in range(0, num_nodes, batch_size):
             end = min(start + batch_size, num_nodes)
@@ -344,7 +355,7 @@ def spatial_pool_self_excluded(
                 keepdim=True,
             ).clamp_min(float(eps))
             context[start:end] = (context_b.float() / norm_b).to(context.dtype)
-    return context.detach()
+    return context.detach() if detach else context
 
 
 class OTGuidedAttention(nn.Module):
@@ -413,6 +424,7 @@ class OTGuidedAttention(nn.Module):
         epoch: int | None = None,
         source_chunk_size: int | None = None,
         checkpoint_attention: bool = False,
+        target_value: torch.Tensor | None = None,
     ) -> torch.Tensor:
         update = self.compute_update_only(
             source_h=source_h,
@@ -423,6 +435,7 @@ class OTGuidedAttention(nn.Module):
             epoch=epoch,
             source_chunk_size=source_chunk_size,
             checkpoint_attention=checkpoint_attention,
+            target_value=target_value,
         )
         return self.apply_update(source_h, update)
 
@@ -436,18 +449,24 @@ class OTGuidedAttention(nn.Module):
         epoch: int | None = None,
         source_chunk_size: int | None = None,
         checkpoint_attention: bool = False,
+        target_value: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return only the OT-guided directional update before residual add.
 
         This is used by synchronous bidirectional attention, where multiple
         directional updates must be computed from the same base embeddings and
-        averaged before one residual update is applied.
+        averaged before one residual update is applied. ``target_value`` only
+        replaces the input to W_V; Q/K and the sparse prior remain unchanged.
         """
 
         topk_idx = topk_idx.to(source_h.device)
         topk_weight = topk_weight.to(device=source_h.device, dtype=source_h.dtype)
         confidence = confidence.to(device=source_h.device, dtype=source_h.dtype)
         target_h = target_h.to(source_h.device)
+        if target_value is not None:
+            if target_value.shape != target_h.shape or target_value.dtype != target_h.dtype:
+                raise ValueError("target_value must match target_h shape and dtype.")
+            target_value = target_value.to(source_h.device)
         use_checkpoint = bool(
             checkpoint_attention
             and self.training
@@ -468,6 +487,7 @@ class OTGuidedAttention(nn.Module):
                         confidence=confidence[start:end],
                         epoch=epoch,
                         use_checkpoint=use_checkpoint,
+                        target_value=target_value,
                     )
                 )
             return torch.cat(chunks, dim=0)
@@ -480,6 +500,7 @@ class OTGuidedAttention(nn.Module):
             confidence=confidence,
             epoch=epoch,
             use_checkpoint=use_checkpoint,
+            target_value=target_value,
         )
 
     def _compute_update_chunk_maybe_checkpointed(
@@ -491,6 +512,7 @@ class OTGuidedAttention(nn.Module):
         confidence: torch.Tensor,
         epoch: int | None = None,
         use_checkpoint: bool = False,
+        target_value: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if not use_checkpoint:
             return self._compute_update_chunk(
@@ -500,6 +522,7 @@ class OTGuidedAttention(nn.Module):
                 topk_weight=topk_weight,
                 confidence=confidence,
                 epoch=epoch,
+                target_value=target_value,
             )
 
         def chunk_fn(
@@ -507,6 +530,7 @@ class OTGuidedAttention(nn.Module):
             target_h_full: torch.Tensor,
             topk_weight_chunk: torch.Tensor,
             confidence_chunk: torch.Tensor,
+            target_value_full: torch.Tensor | None,
         ) -> torch.Tensor:
             return self._compute_update_chunk(
                 source_h=source_h_chunk,
@@ -515,6 +539,7 @@ class OTGuidedAttention(nn.Module):
                 topk_weight=topk_weight_chunk,
                 confidence=confidence_chunk,
                 epoch=epoch,
+                target_value=target_value_full,
             )
 
         return torch_checkpoint(
@@ -523,6 +548,7 @@ class OTGuidedAttention(nn.Module):
             target_h,
             topk_weight,
             confidence,
+            target_value,
             use_reentrant=False,
             preserve_rng_state=True,
         )
@@ -535,11 +561,12 @@ class OTGuidedAttention(nn.Module):
         topk_weight: torch.Tensor,
         confidence: torch.Tensor,
         epoch: int | None = None,
+        target_value: torch.Tensor | None = None,
     ) -> torch.Tensor:
         q = self.W_Q(source_h)
         candidate_h = target_h[topk_idx]
         k = self.W_K(candidate_h)
-        v = self.W_V(candidate_h)
+        v = self.W_V(candidate_h if target_value is None else target_value[topk_idx])
 
         beta = self._current_beta(epoch)
         scores = (q.unsqueeze(1) * k).sum(dim=-1) / math.sqrt(self.d_attn)

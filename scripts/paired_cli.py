@@ -23,6 +23,8 @@ def parse_args(
     sample_dirs=("CRC_003_bin20", "CRC_006_bin20"),
 ):
     parser = argparse.ArgumentParser(description=f"Run {dataset_name} RNA+Protein pipeline.")
+    parser.add_argument("--interaction_neighbor_weight", type=float, default=None,
+                        help="Target spatial-neighbor fraction in attention values (default: 0; experiment: 0.25).")
     parser.add_argument(
         "--data_dir",
         default=None,
@@ -225,10 +227,13 @@ def build_model_config(args):
                 "post_ot_graphsage_scale": float(args.post_ot_graphsage_scale),
             },
         },
-        explicit_overrides={"loss": {
-            "lambda_contrast": float(args.lambda_contrast) if args.lambda_contrast is not None else None,
-            "lambda_spatial_gaussian": args.lambda_spatial_gaussian,
-        }},
+        explicit_overrides={
+            "ot_attention": {"interaction_neighbor_weight": getattr(args, "interaction_neighbor_weight", None)},
+            "loss": {
+                "lambda_contrast": float(args.lambda_contrast) if args.lambda_contrast is not None else None,
+                "lambda_spatial_gaussian": args.lambda_spatial_gaussian,
+            },
+        },
     )
     return model_config
 
